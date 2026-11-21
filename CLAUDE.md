@@ -30,7 +30,8 @@ A small ASP.NET Core Web API for support tickets. It's a learning project for di
 - Write or update tests first, and confirm they fail before implementing.
 - Never weaken or delete a test to make it pass. If a test looks wrong, stop and ask.
 - Keep changes scoped to the ticket. Use one branch per ticket: `feature/T-00X-short-name`.
-- Start a ticket with `/start-ticket T-00X` and finish it with `/finish-ticket`.
+- Start a ticket with `/start-ticket T-00X` and finish it with `/finish-ticket`, which opens a pull request.
+- Never merge pull requests. The user reviews and merges them on GitHub, then runs `/after-merge`.
 - When finished, run `dotnet build` and `dotnet test`, then ask the `code-reviewer` subagent to review the diff.
 
 ## Growing the solution
