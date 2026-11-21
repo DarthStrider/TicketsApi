@@ -7,7 +7,14 @@
       "Bash(dotnet restore:*)",
       "Bash(git status)",
       "Bash(git diff:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(git checkout:*)",
+      "Bash(git switch:*)",
+      "Bash(git pull)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git merge:*)",
+      "Bash(git branch:*)"
     ],
     "ask": [
       "Bash(git push:*)",
@@ -15,7 +22,11 @@
     ],
     "deny": [
       "Read(./.env)",
-      "Read(./**/appsettings.Production.json)"
+      "Read(./**/appsettings.Production.json)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git branch -D:*)",
+      "Bash(git reset --hard:*)"
     ]
   },
   "hooks": {
@@ -23,7 +34,10 @@
       {
         "matcher": "Edit|Write",
         "hooks": [
-          { "type": "command", "command": "bash .claude/hooks/protect-files.sh" }
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/protect-files.sh"
+          }
         ]
       }
     ],
@@ -31,7 +45,10 @@
       {
         "matcher": "Edit|Write",
         "hooks": [
-          { "type": "command", "command": "dotnet format --verbosity quiet || true" }
+          {
+            "type": "command",
+            "command": "dotnet format --verbosity quiet || true"
+          }
         ]
       }
     ]
