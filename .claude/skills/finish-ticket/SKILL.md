@@ -14,4 +14,7 @@ Finish the ticket after the user merged its pull request on GitHub.
      stop and tell the user. **Never use `git branch -D`.**
    - If `origin/<branch>` still exists, ask before running `git push origin --delete <branch>`.
 4. Run `git fetch --prune`, then `dotnet build` and `dotnet test` on main, and show the results.
-5. Summarize: main is at <commit>, the branch is deleted, and the tests are green. Suggest `/start-ticket` for the next ticket.
+5. Ask the `teacher` subagent to add this ticket's lessons to `docs/learning/ClaudeLearning.md` and rebuild the PDF.
+   Then commit only `docs/learning/` on main with the message `Learning notes for <ticket>` and ask before pushing.
+6. Summarize: main is at <commit>, the branch is deleted, the tests are green, and the lessons added.
+   Suggest `/start-ticket` for the next ticket.
