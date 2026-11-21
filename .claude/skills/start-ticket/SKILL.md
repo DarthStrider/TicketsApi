@@ -12,5 +12,8 @@ Start work on ticket **$ARGUMENTS**.
 3. Switch to main and update it: `git checkout main`, then `git pull`.
 4. Create the branch from the ticket file name: `git checkout -b feature/<ticket-file-name-without-.md>`
    (for example `feature/T-001-create-ticket`). If the branch already exists, ask before switching to it.
-5. Read the ticket and list its acceptance criteria.
-6. Explore the relevant code and propose a plan. **Wait for approval before writing any code.**
+5. Ask the `product-manager` subagent to check the ticket. Show the user its report: the acceptance criteria, and any
+   open questions with options. **Get the user's answers to the open questions first**, then have the `product-manager`
+   update the ticket with those decisions.
+6. Explore the relevant code and propose a plan that names the test(s) for each acceptance criterion.
+   **Wait for approval before writing any code.** Write the tests first and show that they fail.

@@ -32,6 +32,19 @@ A small ASP.NET Core Web API for support tickets. It's a learning project for di
 - Keep changes scoped to the ticket. Use one branch per ticket: `feature/T-00X-short-name`.
 - Ticket flow: `/start-ticket T-00X` -> work -> `/create-pr` (opens a pull request) -> the user merges it on GitHub -> `/finish-ticket` (switch to main, pull, delete the branch).
 - Never merge pull requests. The user reviews and merges them on GitHub.
+
+## Team roles (subagents in .claude/agents)
+- **Developer:** the main session. Writes production code in `src/`.
+- **product-manager:** owns `docs/tickets/`. Checks each ticket at the start and records every requirement change.
+- **qa-tester:** owns `tests/`. Maps every acceptance criterion to tests, checks the tests can fail, and signs off with PASS/FAIL.
+- **code-reviewer** and **security-auditor:** read-only reviews.
+- The user is the product owner and makes every product decision. Agents propose, the user decides.
+
+## Change requests
+- When the user asks for new or changed behaviour, **first** have the `product-manager` update the ticket's acceptance criteria
+  and show the diff. Then the tests, then the code. Anything out of scope goes into a new ticket, not into the current one.
+- Never add behaviour that isn't in the ticket. Suggest it instead.
+- Commits are blocked by a hook unless `dotnet build` and `dotnet test` pass.
 - When finished, run `dotnet build` and `dotnet test`, then ask the `code-reviewer` subagent to review the diff.
 
 ## Growing the solution

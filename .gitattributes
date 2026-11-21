@@ -1,0 +1,16 @@
+# Store text files with LF in the repo, and use the OS's native line endings in the working tree.
+* text=auto
+
+# Shell scripts must stay LF everywhere, or bash fails with $'\r' errors (this protects the Claude Code hooks).
+*.sh text eol=lf
+
+# Windows scripts stay CRLF.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files: never convert.
+*.pdf binary
+*.png binary
+*.jpg binary
+*.zip binary
