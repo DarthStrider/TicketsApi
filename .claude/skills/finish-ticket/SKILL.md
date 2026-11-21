@@ -1,29 +1,17 @@
 ---
 name: finish-ticket
-description: Finishes the current ticket by verifying it, pushing the branch and opening a pull request for the user to review and merge on GitHub. Run as /finish-ticket.
+description: After the user merged the ticket's pull request on GitHub, switches to main, pulls and deletes the merged feature branch. Run as /finish-ticket.
 disable-model-invocation: true
 ---
 
-Finish the ticket on the current branch by opening a pull request. **Never merge the PR yourself.** The user reviews and merges it on GitHub.
+Finish the ticket after the user merged its pull request on GitHub.
 
-1. Run `git branch --show-current`. If it is `main` or doesn't start with `feature/`, stop. There is nothing to finish.
-2. Run `gh auth status`. If GitHub CLI isn't logged in, stop and tell the user to run `gh auth login` in their terminal.
-3. Run `dotnet build` and `dotnet test` and show the output. **If either fails, stop.**
-4. Run `git status`. If there are uncommitted changes, show them and ask for a commit message, then `git add -A` and `git commit`.
-5. Ask the `code-reviewer` subagent to review `git diff main...HEAD`. If it reports any **Must fix** items, stop and list them.
-6. Bring the branch up to date: `git fetch origin`. If `origin/main` has commits the branch doesn't, run `git merge origin/main`.
-   If there are conflicts, stop and show them. Otherwise run `dotnet test` again and stop if it fails.
-7. Draft the pull request and **show it to the user for approval before creating it**:
-   - **Title:** `T-00X: <ticket title>`
-   - **Body:**
-     - `## Summary`: what changed and why, in 2–4 sentences
-     - `## Acceptance criteria`: a checklist with every criterion from the ticket file, each with the test(s) that cover it
-     - `## Scope changes`: anything added to or removed from the ticket during the work, and new tickets created (e.g. T-007)
-     - `## Tests`: the `dotnet test` totals (passed/failed/skipped) and the build warnings count
-     - `## Review notes`: Should-fix and Nice-to-have items from the code review that were deferred
-   Ask: "Create this PR?" Apply any edits the user asks for. **Do not continue without a yes.**
-8. Push the branch: `git push -u origin <branch>` (asks for approval).
-9. Write the body to a temporary file and create the PR:
-   `gh pr create --base main --head <branch> --title "<title>" --body-file <file>`, then delete the temporary file.
-10. Show the PR URL and stop. Tell the user: CI runs on the PR, and when it's green they review and merge it on GitHub.
-    After merging, they run `/after-merge` to update local main and delete the branch.
+1. Run `git status`. If there are uncommitted changes, stop and ask what to do with them.
+2. Note the current branch name, then `git checkout main` and `git pull`.
+3. For the feature branch that was just merged:
+   - Check it was merged: `gh pr list --state merged --head <branch>` must show the PR. If not, stop and say so.
+   - Delete it locally with `git branch -d <branch>`. If git says it isn't fully merged (for example after a squash merge),
+     stop and tell the user. **Never use `git branch -D`.**
+   - If `origin/<branch>` still exists, ask before running `git push origin --delete <branch>`.
+4. Run `git fetch --prune`, then `dotnet build` and `dotnet test` on main, and show the results.
+5. Summarize: main is at <commit>, the branch is deleted, and the tests are green. Suggest `/start-ticket` for the next ticket.
