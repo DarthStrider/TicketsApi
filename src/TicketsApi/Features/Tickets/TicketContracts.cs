@@ -8,3 +8,6 @@ public sealed record TicketResponse(
     string? Description,
     TicketStatus Status,
     DateTimeOffset CreatedAt);
+
+// An object, not a bare array, so paging fields (T-008) can be added without breaking clients.
+public sealed record TicketListResponse(IReadOnlyList<TicketResponse> Items);

@@ -155,3 +155,60 @@ global.json
 ## Lessons log
 
 New lessons from the teacher agent are added below, newest last.
+
+### 18. The Enum.TryParse trap (T-002)
+
+- **What happened:** `GET /tickets?status=...` needed to reject bad values with 400. `Enum.TryParse<TicketStatus>` looked like the obvious tool, but it would have let `?status=99` through, and the request would silently return an empty list instead of a 400.
+- **Why:** `Enum.TryParse` is more lenient than it looks. It accepts any number that fits the underlying `int`, even one with no defined name (`"0"`, `"99"`, `"-1"` all succeed). It also trims whitespace (`" Open"` parses) and accepts comma lists (`"Open,Open"`), because enums can be used as flags.
+- **Know this:** to accept only real names, compare against the defined values yourself. That's what `TryParseStatus` in `TicketsEndpoints.cs` does:
+
+```
+foreach (var candidate in Enum.GetValues<TicketStatus>())
+{
+    if (string.Equals(candidate.ToString(), value, StringComparison.OrdinalIgnoreCase))
+    {
+        status = candidate;
+        return true;
+    }
+}
+```
+
+- Adding `Enum.IsDefined` after `TryParse` is not enough either (verified by running it on .NET 10). It rejects only undefined numbers like `"99"`. It still accepts `"0"` (0 is the value of `Open`, so it is defined), `" Open"` (trimmed) and `"Open,Open"` (the comma list is ORed together into `Open`). That's why the code matches against the defined names instead. Tests pin each case: `Numeric_status_returns_400` (0, 99, -1), `Unknown_status_name_returns_400` (`"Open,Open"`) and `Status_with_surrounding_spaces_returns_400`. QA swapped in `Enum.TryParse(ignoreCase: true)` and 6 tests failed, which proves the tests guard the rule.
+- **Interview line:** "Enum.TryParse accepts undefined numbers, spaces and comma lists, so I never use it on its own for client input. I check against the defined names and write a test for each case."
+
+### 19. Choose a response shape you can grow (T-002)
+
+- **What happened:** the list endpoint returns `{ "items": [...] }` (`TicketListResponse(IReadOnlyList<TicketResponse> Items)`), not a bare JSON array.
+- **Why:** paging is planned for T-008. With an object you can add `nextCursor` or `total` later and old clients keep working. Changing a bare array into an object later is a breaking change.
+- **Know this:** a public API contract is hard to change once clients depend on it. Leave room for what's already on the roadmap, but don't build it yet. T-008 holds the paging work.
+- **Interview line:** "I wrap list results in an object from day one, so adding paging later doesn't break anyone."
+
+### 20. Tests that pass before the code exists (T-002)
+
+- **What happened:** the 404 tests for `GET /tickets/{id}` were green before the endpoint existed, because a missing route also returns 404. The developer checked they still meant something: removing the `{id:guid}` route constraint made 3 tests fail, and adding a `.Take(100)` cap made the 101-ticket test fail. QA ran mutants in a scratch copy and found the GET body test couldn't notice a dropped `description`, because the test never sent one. The fix was to send a multibyte title and description and check both come back unchanged.
+- **Why:** "write the test first and watch it fail" breaks down when the failure you expect happens to match the default behaviour.
+- **Know this:** if a new test is green from the start, break the code on purpose until it goes red. If nothing makes it red, it isn't testing anything. A test also only checks the data it sends: no description in the request means nothing to compare against.
+- **Interview line:** "A test that's green before the code exists makes me suspicious. I mutate the code until it fails, and if it never fails, I fix the test."
+
+### 21. Verify what an agent did, not what it says it did (T-002)
+
+- **What happened:** the product-manager agent reported ticket diffs that looked right. Its bulk edit had actually removed line breaks, merging acceptance criteria 1 and 2, 5 and 6, 7 and 8, and 14 and 15. The code-reviewer caught it by reading the file itself.
+- **Why:** an agent's summary describes what it meant to do. A bulk or scripted edit can do something else, and the summary won't say so.
+- **Know this:** check the real artifact (`git diff`, the file itself) after an agent edits anything, especially specs, which tests and code are built from. An independent reviewer that reads the source, not the report, is worth having.
+- **Interview line:** "I treat an agent's report as a claim. The diff is the evidence, and a second agent reading the file caught what the first one's summary hid."
+
+### 22. Test isolation with an in-memory store and a fake clock (T-002)
+
+- **What happened:** the store is an in-memory singleton, so tickets from one test could show up in another test's list. List order also depends on `createdAt`, which comes from the clock.
+- **Fix:** each test builds a fresh host with `WithWebHostBuilder`, so each gets an empty store. A small hand-written `TestClock : TimeProvider` replaces the real clock through `ConfigureTestServices`, so tests set `createdAt` themselves.
+
+```
+public sealed class TestClock(DateTimeOffset start) : TimeProvider
+{
+    public DateTimeOffset UtcNow { get; set; } = start;
+    public override DateTimeOffset GetUtcNow() => UtcNow;
+}
+```
+
+- **Know this:** `TimeProvider` is the built-in .NET abstraction for "now". Inject it instead of calling `DateTime.UtcNow`, and tests can control time. Shared state between tests causes flaky, order-dependent failures, so give each test its own.
+- **Interview line:** "I inject TimeProvider so tests own the clock, and I give each test its own host so shared in-memory state can't leak between tests."
