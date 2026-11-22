@@ -19,8 +19,70 @@ public static class TicketsEndpoints
         group.MapPost("", CreateTicketAsync)
             .WithMetadata(new RequestSizeLimitAttribute(MaxRequestBodyBytes));
 
+        // The :guid constraint makes a non-GUID id fall through to a 404 (T-002 criterion 3).
+        group.MapGet("{id:guid}", GetTicketAsync);
+        group.MapGet("", ListTicketsAsync);
+
         return app;
     }
+
+    private static async Task<Results<Ok<TicketResponse>, NotFound>> GetTicketAsync(
+        Guid id,
+        ITicketStore store,
+        CancellationToken cancellationToken)
+    {
+        var ticket = await store.GetAsync(id, cancellationToken);
+
+        // The empty 404 becomes ProblemDetails through AddProblemDetails + UseStatusCodePages in Program.cs.
+        return ticket is null
+            ? TypedResults.NotFound()
+            : TypedResults.Ok(ToResponse(ticket));
+    }
+
+    // Bound as an array so a repeated ?status= can be detected and rejected (T-002 criterion 15).
+    private static async Task<Results<Ok<TicketListResponse>, ValidationProblem>> ListTicketsAsync(
+        [FromQuery] string[]? status,
+        ITicketStore store,
+        CancellationToken cancellationToken)
+    {
+        TicketStatus? filter = null;
+        if (status is { Length: > 0 })
+        {
+            if (status.Length > 1 || !TryParseStatus(status[0], out var parsed))
+            {
+                return TypedResults.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["status"] = [$"Status must be one of: {string.Join(", ", Enum.GetNames<TicketStatus>())}."],
+                });
+            }
+
+            filter = parsed;
+        }
+
+        var tickets = await store.ListAsync(filter, cancellationToken);
+
+        return TypedResults.Ok(new TicketListResponse([.. tickets.Select(ToResponse)]));
+    }
+
+    // Matches only defined status names, ignoring case. Enum.TryParse is not used on its own because it
+    // accepts numeric strings, even undefined ones like "99", and also trims spaces and accepts "A,B" lists.
+    private static bool TryParseStatus(string value, out TicketStatus status)
+    {
+        foreach (var candidate in Enum.GetValues<TicketStatus>())
+        {
+            if (string.Equals(candidate.ToString(), value, StringComparison.OrdinalIgnoreCase))
+            {
+                status = candidate;
+                return true;
+            }
+        }
+
+        status = default;
+        return false;
+    }
+
+    private static TicketResponse ToResponse(Ticket ticket) =>
+        new(ticket.Id, ticket.Title, ticket.Description, ticket.Status, ticket.CreatedAt);
 
     private static async Task<Results<Created<TicketResponse>, ValidationProblem>> CreateTicketAsync(
         CreateTicketRequest request,
@@ -45,10 +107,7 @@ public static class TicketsEndpoints
 
         await store.AddAsync(ticket, cancellationToken);
 
-        var response = new TicketResponse(
-            ticket.Id, ticket.Title, ticket.Description, ticket.Status, ticket.CreatedAt);
-
-        return TypedResults.Created($"/tickets/{ticket.Id}", response);
+        return TypedResults.Created($"/tickets/{ticket.Id}", ToResponse(ticket));
     }
 
     // Lengths are UTF-16 code units (string.Length), per the T-001 acceptance criteria.
