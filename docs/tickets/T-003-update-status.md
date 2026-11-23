@@ -23,6 +23,7 @@
 ### Invalid transitions
 8. Given a ticket, when I PATCH a status that is not an allowed transition from its current status (criterion 4) and not its current status (criterion 7), then I get `409` with ProblemDetails. The tests cover at least: Open→Resolved, Open→InReview, InProgress→Open, InProgress→Closed, InProgress→InReview, Resolved→Open, InReview→Open, InReview→Resolved, and Closed→each other status (Open, InProgress, Resolved, InReview).
 9. Closed is terminal. Given a Closed ticket, when I PATCH any status other than Closed, then I get `409`.
+   - Product decision: a Closed ticket is never re-opened. Follow-up work (for example a bug caused by the ticket's change, or a refactor of it) is a new ticket linked to the original (see T-010).
 10. Given an invalid transition, when I get the `409`, then the ProblemDetails contains the extension fields `currentStatus` and `requestedStatus`, both as canonical names. There is no `allowedStatuses` field. No fixed `title` or `detail` text is required, because T-004 localizes the messages.
 11. Given a PATCH was rejected (`409` or `400`), when I GET `/tickets/{id}`, then the ticket is unchanged.
 
