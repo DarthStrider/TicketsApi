@@ -2,7 +2,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
-    <!-- Only for `dotnet ef` at design time; not shipped with the app. -->
+    <!-- Needed by `dotnet ef`. PrivateAssets keeps it from flowing to referencing projects; its DLL is still in the build output. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" PrivateAssets="all" />
   </ItemGroup>
   <ItemGroup>
