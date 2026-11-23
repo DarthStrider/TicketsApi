@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- T-004: approved text from docs/tickets/T-004-bilingual-errors.md ("Message text"). Keep both files in sync. -->
+<root>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <data name="TitleRequired" xml:space="preserve">
+    <value>Le titre est obligatoire.</value>
+  </data>
+  <data name="TitleTooLong" xml:space="preserve">
+    <value>Le titre doit comporter au plus 200 caractères.</value>
+  </data>
+  <data name="DescriptionTooLong" xml:space="preserve">
+    <value>La description doit comporter au plus 4000 caractères.</value>
+  </data>
+  <data name="StatusRequired" xml:space="preserve">
+    <value>Le statut est obligatoire.</value>
+  </data>
+  <data name="StatusMustBeOneOf" xml:space="preserve">
+    <value>Le statut doit être l'une des valeurs suivantes : Open, InProgress, Resolved, InReview, Closed.</value>
+  </data>
+  <data name="StatusRepeated" xml:space="preserve">
+    <value>Le statut ne doit apparaître qu'une seule fois.</value>
+  </data>
+  <data name="BodyInvalid" xml:space="preserve">
+    <value>Le corps de la requête doit être un objet JSON valide.</value>
+  </data>
+  <data name="Title400Validation" xml:space="preserve">
+    <value>Une ou plusieurs erreurs de validation se sont produites.</value>
+  </data>
+  <data name="Title400" xml:space="preserve">
+    <value>Requête incorrecte</value>
+  </data>
+  <data name="Title404" xml:space="preserve">
+    <value>Ressource introuvable</value>
+  </data>
+  <data name="Title405" xml:space="preserve">
+    <value>Méthode non autorisée</value>
+  </data>
+  <data name="Title409" xml:space="preserve">
+    <value>Conflit</value>
+  </data>
+  <data name="Title413" xml:space="preserve">
+    <value>Contenu trop volumineux</value>
+  </data>
+  <data name="Title415" xml:space="preserve">
+    <value>Type de média non pris en charge</value>
+  </data>
+  <data name="Title500" xml:space="preserve">
+    <value>Une erreur s'est produite lors du traitement de votre requête.</value>
+  </data>
+</root>
