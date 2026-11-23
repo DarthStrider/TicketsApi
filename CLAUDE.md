@@ -38,6 +38,7 @@ A small ASP.NET Core Web API for support tickets. It's a learning project for di
 - **product-manager:** owns `docs/tickets/`. Checks each ticket at the start and records every requirement change.
 - **qa-tester:** owns `tests/`. Maps every acceptance criterion to tests, checks the tests can fail, and signs off with PASS/FAIL.
 - **code-reviewer** and **security-auditor:** read-only reviews.
+- **database-engineer:** checks database correctness (migrations and schema, query translation, concurrency and data integrity, test database isolation) on any ticket touching EF Core or the schema. Writes tests only in `tests/TicketsApi.Tests/Data/`; QA still gives the final PASS/FAIL.
 - **teacher:** owns `docs/learning/`. Records lessons for the user after each ticket, or when the user says "teacher, note this".
 - The user is the product owner and makes every product decision. Agents propose, the user decides.
 
