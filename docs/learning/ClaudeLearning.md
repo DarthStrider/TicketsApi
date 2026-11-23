@@ -212,3 +212,67 @@ public sealed class TestClock(DateTimeOffset start) : TimeProvider
 
 - **Know this:** `TimeProvider` is the built-in .NET abstraction for "now". Inject it instead of calling `DateTime.UtcNow`, and tests can control time. Shared state between tests causes flaky, order-dependent failures, so give each test its own.
 - **Interview line:** "I inject TimeProvider so tests own the clock, and I give each test its own host so shared in-memory state can't leak between tests."
+
+### 23. Compare-and-swap with ConcurrentDictionary.TryUpdate (T-003)
+
+- **What happened:** the first version of the status change wrote with `dict[key] = value`. Two racing requests both got 200, and the race test failed with Expected [OK, Conflict], Actual [OK, OK]. One update was silently lost.
+- **Why:** a read followed by a plain write is not atomic. Between "read the ticket" and "save the ticket", another request can change it, and the second write overwrites the first without noticing.
+- **Know this:** `TryUpdate(key, newValue, comparisonValue)` replaces the value only if it is still `comparisonValue`, and returns `false` otherwise. That is compare-and-swap.
+
+```
+// InMemoryTicketStore: write only if nobody changed it since we read it
+return _tickets.TryUpdate(id, updated, current) ? updated : null;
+```
+
+- `Ticket` is an immutable class with no `Equals` override, so the comparison is by reference. "Same reference" means "unchanged since I read it". That even catches A to B to A, where the status looks the same but someone changed it in between.
+- In T-005 the same idea becomes an EF Core concurrency token: `UPDATE ... WHERE Status = @expected`, and zero rows updated means you lost the race.
+- **Interview line:** "Read-then-write loses updates under concurrency. I use compare-and-swap, TryUpdate in memory and a concurrency token in EF Core, so the loser finds out instead of overwriting."
+
+### 24. Testing a race deterministically (T-003)
+
+- **What happened:** instead of firing 200 parallel rounds and hoping the race shows up, the tests force it every time.
+- **Why:** a race that only happens sometimes gives a flaky test. It can pass on your machine and in CI while the bug is still there.
+- **Know this:** add a test-only hook that pauses a request at the exact point between its read and its write. Here it is `TicketStoreTestHooks`, an `internal` singleton that the test project can reach through `<InternalsVisibleTo Include="TicketsApi.Tests" />` in the csproj. The tests use a "WriteGate":
+1. Arm the gate.
+2. Start request X and wait until it is paused after its read.
+3. Run competing request Y to completion.
+4. Release X. X now always loses, and the test checks it gets the right answer.
+- Then prove the test can fail: remove the atomic check and watch it go red.
+- **Interview line:** "I don't test races with volume and luck. I add a hook that pauses one request between read and write, run the other one through, and the race happens on every run."
+
+### 25. A test can pass for the wrong reason (T-003)
+
+- **What happened:** the test "loses three times, then 409 with the true current status" ended with the ticket in Resolved, which was also the status the request first read. A bug that reported the stale first read would still pass. QA caught this (finding N6). The fix was a scenario where the final status (InReview) is different from the first read.
+- **Why:** the expected value could be produced by both the right and the wrong implementation, so the test could not tell them apart.
+- **Know this:** pick test data so that only the correct code can produce the expected value. If two plausible implementations give the same answer, the test is not checking the difference between them.
+- **Interview line:** "I ask what a wrong implementation would return. If it's the same as my expected value, the test needs different data."
+
+### 26. Framework binding can run before your checks (T-003)
+
+- **What happened:** the endpoint had to return 415 for a wrong content type. The check was inside the handler, but a broken `application/merge-patch+json` body got 400 instead of 415.
+- **Why:** Minimal APIs accept any `+json` content type, and `[FromBody]` parses the body before your handler runs. If parsing fails, the framework answers 400 and your check never runs.
+- **Know this:** if your check must come first, take the raw `HttpRequest`, check the content type, then parse yourself:
+
+```
+using var document = await JsonDocument.ParseAsync(request.Body, cancellationToken: cancellationToken);
+```
+
+- The body size limit still works, because Kestrel throws a `BadHttpRequestException` with 413 while the body is being read.
+- Validating the raw `JsonElement` also lets you reject numbers, wrong types and duplicate keys with a 400 that names `status`. With `[FromBody]` and an enum, the default converter would quietly accept `{"status": 1}`.
+- **Interview line:** "Model binding runs before the handler, so a check in the handler can come too late. When order matters, I read the raw request and validate the JSON myself."
+
+### 27. Mutants that never ran (T-003)
+
+- **What happened:** twice, the developer's "break the code to prove the test fails" step did nothing, and the result looked like "0 failed":
+1. `if (false)` caused an unreachable-code warning. With `TreatWarningsAsErrors` the build failed, so no test ran at all.
+2. A regex replacement used `\n`, but the file had CRLF line endings, so it matched nothing and the code was unchanged.
+- **Why:** a mutation test only means something if the mutation was applied and compiled. A failed build or a no-op edit looks like a passing run if you only read the last line.
+- **Know this:** after mutating, check the diff shows the change and the build succeeded, and check that the test count is what you expect. Only then trust "0 failed". This builds on lessons 11, 16 and 20.
+- **Interview line:** "A green run after a mutation proves nothing until I've seen the mutation in the diff and a successful build. Otherwise I might be testing the original code, or nothing."
+
+### 28. Product decisions surface during review (T-003)
+
+- **What happened:** review found that the retry loop had behaviour no acceptance criterion described, and its last step could return a 409 with the wrong current status. The developer did not pick a fix. They asked the product owner, who chose "re-evaluate, then 409 with the true status". The product-manager wrote that down as criterion 25 before the code changed.
+- **Why:** edge cases in concurrency are product behaviour: they decide what a client sees. An agent that quietly picks one is making a product decision it doesn't own.
+- **Know this:** when a review finds behaviour the spec doesn't cover, stop, ask the decision-maker, record the answer in the ticket, then update tests and code. The order is spec, tests, code.
+- **Interview line:** "When agents find a gap in the spec, they propose options and the product owner decides. The decision goes into the acceptance criteria before any code changes."

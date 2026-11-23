@@ -1,6 +1,8 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Text.Json;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Net.Http.Headers;
 
 namespace TicketsApi.Features.Tickets;
 
@@ -23,7 +25,137 @@ public static class TicketsEndpoints
         group.MapGet("{id:guid}", GetTicketAsync);
         group.MapGet("", ListTicketsAsync);
 
+        group.MapPatch("{id:guid}/status", ChangeStatusAsync)
+            .WithMetadata(new RequestSizeLimitAttribute(MaxRequestBodyBytes));
+
         return app;
+    }
+
+    // How many writes a status change tries before giving up with 409 (T-003 criterion 25).
+    private const int MaxStatusWriteAttempts = 3;
+
+    private static readonly string StatusMustBeOneOf =
+        $"Status must be one of: {string.Join(", ", Enum.GetNames<TicketStatus>())}.";
+
+    // Checks run in the order T-003 criterion 23 requires: route (404), content type (415), body (400),
+    // lookup (404), transition (409).
+    // The body is read here, not bound by the framework, for two reasons:
+    // - The content type must be checked first. Minimal APIs accept any "+json" type and would parse
+    //   (and reject with 400) an application/merge-patch+json body before this handler runs.
+    // - Every bad status (number, wrong type, repeated key) must get a 400 naming `status`. Binding straight to
+    //   TicketStatus would accept numbers and give generic errors.
+    private static async Task<Results<Ok<TicketResponse>, ValidationProblem, NotFound, ProblemHttpResult>>
+        ChangeStatusAsync(
+            Guid id,
+            HttpRequest request,
+            ITicketStore store,
+            CancellationToken cancellationToken)
+    {
+        if (!IsPlainJson(request.ContentType))
+        {
+            return TypedResults.Problem(statusCode: StatusCodes.Status415UnsupportedMediaType);
+        }
+
+        TicketStatus requested;
+        try
+        {
+            // The size cap (RequestSizeLimit) is enforced while reading: too large throws a 413 BadHttpRequestException.
+            // The body is read as UTF-8, the encoding JSON requires (RFC 8259); a charset parameter is not transcoded.
+            using var document = await JsonDocument.ParseAsync(request.Body, cancellationToken: cancellationToken);
+            if (!TryReadRequestedStatus(document.RootElement, out requested, out var errors))
+            {
+                return TypedResults.ValidationProblem(errors);
+            }
+        }
+        catch (JsonException)
+        {
+            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["body"] = ["The request body must be a valid JSON object."],
+            });
+        }
+
+        // Read, check, then compare-and-swap. If another change wins in between, re-read and evaluate again
+        // (T-003 criterion 25), so every answer reflects a status the ticket actually had.
+        // The loop ends: at most MaxStatusWriteAttempts writes, and the read after the last lost write always returns.
+        for (var attempt = 1; ; attempt++)
+        {
+            var ticket = await store.GetAsync(id, cancellationToken);
+            if (ticket is null)
+            {
+                return TypedResults.NotFound();
+            }
+
+            // The same status again is a no-op (T-003 criterion 7).
+            if (ticket.Status == requested)
+            {
+                return TypedResults.Ok(ToResponse(ticket));
+            }
+
+            // Not allowed, or allowed but every write so far lost to a concurrent change.
+            if (!TicketTransitions.IsAllowed(ticket.Status, requested) || attempt > MaxStatusWriteAttempts)
+            {
+                return TransitionConflict(ticket.Status, requested);
+            }
+
+            var updated = await store.TryUpdateStatusAsync(id, ticket.Status, requested, cancellationToken);
+            if (updated is not null)
+            {
+                return TypedResults.Ok(ToResponse(updated));
+            }
+        }
+    }
+
+    // currentStatus and requestedStatus explain the 409 without fixed text, which T-004 localizes (criterion 10).
+    private static ProblemHttpResult TransitionConflict(TicketStatus current, TicketStatus requested) =>
+        TypedResults.Problem(
+            statusCode: StatusCodes.Status409Conflict,
+            extensions: new Dictionary<string, object?>
+            {
+                ["currentStatus"] = current.ToString(),
+                ["requestedStatus"] = requested.ToString(),
+            });
+
+    private static bool IsPlainJson(string? contentType) =>
+        MediaTypeHeaderValue.TryParse(contentType, out var mediaType)
+        && string.Equals(mediaType.MediaType.Value, "application/json", StringComparison.OrdinalIgnoreCase);
+
+    // T-003 criteria 12-19. Property names match case-insensitively, like the rest of the API's JSON binding,
+    // so "status" and "Status" together count as a repeated key.
+    private static bool TryReadRequestedStatus(
+        JsonElement body, out TicketStatus status, out Dictionary<string, string[]> errors)
+    {
+        status = default;
+        errors = new Dictionary<string, string[]>();
+
+        if (body.ValueKind != JsonValueKind.Object)
+        {
+            errors["body"] = ["The request body must be a valid JSON object."];
+            return false;
+        }
+
+        var values = body.EnumerateObject()
+            .Where(p => string.Equals(p.Name, "status", StringComparison.OrdinalIgnoreCase))
+            .Select(p => p.Value)
+            .ToList();
+
+        string? error = values switch
+        {
+            [] => "Status is required.",
+            [{ ValueKind: JsonValueKind.Null }] => "Status is required.",
+            [{ ValueKind: not JsonValueKind.String }] => StatusMustBeOneOf,
+            [var value] when !TryParseStatus(value.GetString()!, out status) => StatusMustBeOneOf,
+            [_] => null,
+            _ => "Status must appear only once.",
+        };
+
+        if (error is not null)
+        {
+            errors["status"] = [error];
+            return false;
+        }
+
+        return true;
     }
 
     private static async Task<Results<Ok<TicketResponse>, NotFound>> GetTicketAsync(
@@ -52,7 +184,7 @@ public static class TicketsEndpoints
             {
                 return TypedResults.ValidationProblem(new Dictionary<string, string[]>
                 {
-                    ["status"] = [$"Status must be one of: {string.Join(", ", Enum.GetNames<TicketStatus>())}."],
+                    ["status"] = [StatusMustBeOneOf],
                 });
             }
 
