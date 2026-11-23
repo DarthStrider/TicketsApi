@@ -2,4 +2,8 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Lets the tests reach internal types, e.g. the store's test-only concurrency hook (T-003 criterion 24). -->
+    <InternalsVisibleTo Include="TicketsApi.Tests" />
+  </ItemGroup>
 </Project>

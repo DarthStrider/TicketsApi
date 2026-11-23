@@ -158,6 +158,39 @@ public class ListTicketsTests(WebApplicationFactory<Program> factory)
         Assert.All(items, item => Assert.Equal("Open", item.GetProperty("status").GetString()));
     }
 
+    // T-003 criterion 26 (deferred from T-002 criterion 9): each status returns only its own tickets, in order.
+    [Theory]
+    [InlineData("Open", "Open")]
+    [InlineData("InProgress", "InProgress")]
+    [InlineData("Resolved", "Resolved")]
+    [InlineData("InReview", "InReview")]
+    [InlineData("Closed", "Closed")]
+    [InlineData("inreview", "InReview")]
+    [InlineData("inprogress", "InProgress")]
+    public async Task Status_filter_excludes_other_statuses(string query, string status)
+    {
+        var clock = new TestClock(T0);
+        using var app = factory.WithClock(clock);
+        var client = app.CreateClient();
+
+        // Two tickets per status, created one minute apart, so the expected order is newest first.
+        var byStatus = new Dictionary<string, List<Guid>>();
+        var minute = 0;
+        foreach (var s in new[] { "Open", "InProgress", "Resolved", "InReview", "Closed" })
+        {
+            byStatus[s] = [];
+            for (var i = 0; i < 2; i++)
+            {
+                clock.UtcNow = T0.AddMinutes(minute++);
+                byStatus[s].Add(await client.CreateTicketInStatusAsync(s, $"{s} {i}"));
+            }
+        }
+
+        var ids = await GetItemIdsAsync(client, $"/tickets?status={query}");
+
+        Assert.Equal(Enumerable.Reverse(byStatus[status]), ids);
+    }
+
     [Theory]
     [InlineData("0")]
     [InlineData("99")]

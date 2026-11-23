@@ -6,6 +6,7 @@ builder.Services.AddOpenApi();
 builder.Services.AddProblemDetails();
 
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<TicketStoreTestHooks>();
 builder.Services.AddSingleton<ITicketStore, InMemoryTicketStore>();
 
 var app = builder.Build();
