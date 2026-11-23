@@ -1,3 +1,4 @@
+using TicketsApi.Data;
 using TicketsApi.Features.Tickets;
 using TicketsApi.Localization;
 
@@ -8,9 +9,13 @@ builder.Services.AddTicketsLocalization(); // includes AddProblemDetails with lo
 
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<TicketStoreTestHooks>();
-builder.Services.AddSingleton<ITicketStore, InMemoryTicketStore>();
+builder.Services.AddTicketsDatabase(); // SQLite through EF Core, from ConnectionStrings:Tickets (T-005)
+builder.Services.AddScoped<ITicketStore, EfTicketStore>();
 
 var app = builder.Build();
+
+// Fails fast without a connection string; migrates in Development, refuses pending migrations elsewhere.
+await app.InitializeTicketsDatabaseAsync();
 
 // First, so every response below (including the error handlers' ProblemDetails) is in the request's language.
 app.UseTicketsLocalization();

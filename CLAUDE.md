@@ -5,13 +5,19 @@ A small ASP.NET Core Web API for support tickets. It's a learning project for di
 ## Tech stack
 - .NET 10, C#, ASP.NET Core **Minimal APIs**
 - xUnit v3 + WebApplicationFactory for integration tests (pass `TestContext.Current.CancellationToken` to async calls)
-- In-memory storage for now (EF Core comes in ticket T-005)
+- SQLite through EF Core (since T-005). The connection string is `ConnectionStrings:Tickets`; Development uses
+  `App_Data/tickets.dev.db` and migrates at startup. Every other environment (Production, Staging, ...) must have
+  its migrations applied before it starts, or startup fails.
+- Integration tests use `TicketsApiFactory`, which gives every test host its own temp SQLite file.
 
 ## Commands
 - Build: `dotnet build`
 - Test: `dotnet test`
 - Format: `dotnet format`
 - Run: `dotnet run --project src/TicketsApi`
+- Restore local tools (once): `dotnet tool restore`
+- Add a migration: `dotnet ef migrations add <Name> --project src/TicketsApi --output-dir Data/Migrations`
+- Apply migrations (Production): `dotnet ef database update --project src/TicketsApi --connection "<connection string>"`
 
 ## Structure
 - `src/TicketsApi/` has the API. Group endpoints by feature in `Features/<Feature>/` (vertical slices).

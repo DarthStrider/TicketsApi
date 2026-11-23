@@ -57,7 +57,7 @@ public abstract class ErrorsAndLimitsTests<TFactory> : IClassFixture<TFactory>
     [Fact]
     public async Task Body_one_byte_over_the_cap_returns_413_problem_details()
     {
-        var response = await PostRawAsync(ValidTicketJsonOfSize(Cap + 1));
+        var response = await OverCapRequests.SendAsync(_client, HttpMethod.Post, "/tickets", ValidTicketJsonOfSize(Cap + 1));
 
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
         await AssertProblemDetailsAsync(response);

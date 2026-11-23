@@ -12,8 +12,8 @@ namespace TicketsApi.Tests.Localization;
 
 // T-004 criteria 1-7: which language a request gets, and the response headers that say so.
 // Each test triggers the same validation error (an empty title) and checks which language its message is in.
-public class LanguageSelectionTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>
+public class LanguageSelectionTests(TicketsApiFactory factory)
+    : IClassFixture<TicketsApiFactory>
 {
     private readonly HttpClient _client = factory.CreateClient();
 

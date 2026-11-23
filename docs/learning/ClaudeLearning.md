@@ -349,3 +349,129 @@ options.SupportedUICultures = [en, fr];  // CurrentUICulture: from Accept-Langua
 - **Why:** many features that used to be separate packages now ship in `Microsoft.AspNetCore.App`. Adding a package for them is unnecessary and can add a version to keep in sync.
 - **Know this:** before adding a package, check whether the API is already in the shared framework. This is part of the rule "never write a package version from memory": the best version to pick is often no package at all.
 - **Interview line:** "Before adding a dependency I check whether the framework already has it. For localization in ASP.NET Core it does, so there's nothing to install or upgrade."
+
+### 36. A version number, not the status, as the concurrency token (T-005)
+
+- **What happened:** the status change is an optimistic check-and-set: read the ticket, then write only if nothing changed. Criterion 8 made an integer `Version` the concurrency token, not `Status`.
+- **Why:** if the write checked "status is still A", a change A -> B -> A by other requests in between would pass the check, and the change made in between would be silently overwritten. A number that goes up on every write never comes back to an old value, so any write in between makes the check fail.
+- **Know this:** in `EfTicketStore`, the write only matches the row if the version is the one that was read, and bumps it in the same statement. Zero rows updated means someone else wrote first, and the change is re-evaluated (T-003 criterion 25):
+
+```
+var updated = await db.Tickets
+    .Where(t => t.Id == id && EF.Property<int>(t, "Version") == version)
+    .ExecuteUpdateAsync(s => s
+        .SetProperty(t => t.Status, next)
+        .SetProperty(t => EF.Property<int>(t, "Version"), version + 1), ct);
+```
+
+- `Version` is a *shadow property*: it exists in the EF model and the table but not on the `Ticket` class, so it can never leak into a response (criterion 10).
+- **Interview line:** "I use a version number as the concurrency token, never a business field. A field can go from A to B and back to A, and then the check passes and an update is lost."
+
+### 37. SQLite and DateTimeOffset: store UTC ticks (T-005)
+
+- **What happened:** `GET /tickets` must be sorted newest first by the database, not in memory (criterion 5). The EF Core SQLite provider can't translate `ORDER BY` on a `DateTimeOffset` column, so `createdAt` is stored as UTC ticks in an INTEGER column through a value converter.
+- **Why:** SQLite has no real date type. EF Core stores a `DateTimeOffset` as text there, and text with offsets doesn't sort as time, so the provider refuses to translate the sort.
+- **Know this:** a value converter maps a .NET type to a column type. One tick is 100 ns, so the value also round-trips exactly, to the tick (criterion 4):
+
+```
+ticket.Property(t => t.CreatedAt).HasConversion(
+    value => value.UtcTicks,
+    ticks => new DateTimeOffset(ticks, TimeSpan.Zero));
+```
+
+- The trade-off: the original offset is not stored and always comes back as `+00:00`. That is fine here because the app only writes UTC.
+- **Interview line:** "SQLite can't sort a DateTimeOffset, so I store UTC ticks as an integer with a value converter. It sorts in SQL and keeps full precision."
+
+### 38. One real SQLite file per test host (T-005)
+
+- **What happened:** `TicketsApiFactory` gives every test host its own database: a temp file with a unique name (`tickets-test-<guid>.db`), migrated before the host starts. The tests run against real SQLite, not the EF Core InMemory provider (criterion 17).
+- **Why:** a shared database makes tests depend on each other and on the order they run in. The InMemory provider is not a relational database and runs no SQL, so it can't prove the SQL sort, the `ExecuteUpdate` concurrency check or the migrations. Microsoft's own docs advise against it for this kind of testing.
+- **Know this:** a unique file per host gives isolation, so tests can run in parallel, and keeps real database behaviour. On Windows, SQLite's connection pool keeps the file open, so cleanup calls `SqliteConnection.ClearAllPools()` before deleting the file and its `-wal` and `-shm` side files.
+- **Interview line:** "My integration tests use the real database engine, one fresh file per test host. They stay isolated and parallel, and they test the SQL I actually ship."
+
+### 39. Migrate() refuses pending model changes (T-005)
+
+- **What happened:** since EF Core 9, `Migrate()` throws when the model has changes that no migration covers. A model change without `dotnet ef migrations add` fails at startup instead of running against an old schema. Criterion 14 also has a test that asks EF Core whether the model has pending changes.
+- **Why:** before EF Core 9 it was easy to change an entity, forget the migration, and only find out when a query hit a missing column.
+- **Know this:** the model (your C# configuration) and the migrations (the committed history of schema changes) must agree. After every model change, add a migration, and keep a test that fails when they drift. Outside Development this API doesn't migrate at startup: it refuses to start if migrations are pending (criterion 20), because they are applied before deploy with `dotnet ef database update` or a migration bundle.
+- **Interview line:** "Changing the model and adding the migration are one step. EF Core 9 enforces it in Migrate, and a test catches it even earlier."
+
+### 40. SQLite doesn't enforce max lengths (T-005)
+
+- **What happened:** the model declares `HasMaxLength(200)` for the title and `HasMaxLength(4000)` for the description, as documentation only (criterion 3). An earlier draft of this lesson said the pending-changes check from lesson 39 might still ask for a migration after a max-length change. The developer tested that in a throwaway copy of the repo: after changing the title to `HasMaxLength(300)`, `dotnet ef migrations has-pending-model-changes` printed "No changes have been made to the model since the last migration". A forced `dotnet ef migrations add TitleLength` had an empty `Up()`, and its SQL script only inserted the `__EFMigrationsHistory` row, with no ALTER and no table rebuild.
+- **Why:** SQLite uses type affinity: a declared length such as `TEXT(200)` is accepted but never checked. EF Core's SQLite provider ignores max length when it compares the model with the last migration, even though InitialCreate records `maxLength: 200`. Server databases such as SQL Server or PostgreSQL do enforce lengths.
+- **Know this:** on SQLite, a max-length-only change needs no migration, and neither `HasPendingModelChanges()` nor the `Model_has_no_pending_changes` test can catch one. The endpoint validation (T-001) is the only enforcement. If the database moves to a server engine, the lengths become real limits and real migrations. The meta-point is lesson 42 again: a plausible but untested claim was checked with a cheap experiment before it stayed in the notes.
+- **Interview line:** "On SQLite, a max length is documentation, and EF Core doesn't even see a length change as a model change. I proved that in a throwaway copy rather than trusting a plausible guess. Validation lives at the API boundary."
+
+### 41. "Success" against the wrong database (T-005)
+
+- **What happened:** `dotnet ef database update` without `--connection` reported success. The design-time factory named no database, so SQLite opened an empty temporary database, migrated it and threw it away. Nothing real changed. The factory now uses `Mode=ReadOnly`, so the same command fails and `--connection "<connection string>"` is required.
+- **Why:** with SQLite, an empty data source is valid: it means a temporary database. So "no database configured" was not an error, it was a throwaway target.
+- **Know this:** `IDesignTimeDbContextFactory<T>` is the class the `dotnet ef` tool uses to build your context without starting the app. Make its default fail loudly rather than succeed against nothing:
+
+```
+public TicketsDbContext CreateDbContext(string[] args) =>
+    new(new DbContextOptionsBuilder<TicketsDbContext>().UseSqlite("Mode=ReadOnly").Options);
+```
+
+- **Interview line:** "A command that succeeds against the wrong target is worse than one that fails. I made the tool's default read-only, so applying migrations without naming the database is an error."
+
+### 42. Check a reviewer's claim before acting on it (T-005)
+
+- **What happened:** in T-005, review findings were checked against the code or reproduced before anything changed. This is the habit from lesson 13: in T-001 the reviewer's trailing-slash claim turned out to be wrong.
+- **Why:** a reviewer agent can sound certain and still be wrong. Acting on a wrong finding adds code, tests or scope for nothing.
+- **Know this:** treat each finding as a hypothesis. Reproduce it (a test, a probe, or reading the exact code), then fix it, reject it with a reason, or move it to a new ticket.
+- **Interview line:** "Review findings are hypotheses. I reproduce them or ask for evidence before anyone changes code."
+
+### 43. The 413 flake: amplify a rare race to prove the fix (T-005)
+
+- **What happened:** the 413 (body too large) tests on Kestrel sometimes failed with a connection reset instead of a 413. Kestrel knew from `Content-Length` that the body was too large, answered while the client was still uploading, and closed the connection. On Windows the unread data causes a reset, and the client sometimes saw the reset instead of the response.
+- **Fix:** the tests send `Expect: 100-continue` (`OverCapRequests`). The client sends only the headers and waits. Kestrel rejects the request before asking for the body, so the body is never sent and there is nothing to race. If the limit were missing, Kestrel would ask for the body and the test would fail, as it should.
+- **Proof:** 20 runs could not reproduce the flake. Making it worse on purpose (a 4 MB body under load) gave 352 failures out of 600 before the fix and 0 out of 600 after.
+- **Know this:** a rare race can't be proven fixed by "it passed 20 times". Change the conditions so the bug happens often, measure, then apply the fix under the same conditions. It's the same idea as lesson 24: make the race happen on purpose.
+- **Interview line:** "When a flake won't reproduce, I amplify it until it fails often, then show the fix takes it to zero under the same load. 352 of 600 down to 0 of 600 is proof; a few green runs are not."
+
+### 44. A mutant on a stale build (T-005)
+
+- **What happened:** QA's mutant runner swapped files in and out. Restored files kept their old timestamps, so the build could treat the project as up to date and the tests ran against an old dll. A mutant "passed" without its change ever being compiled.
+- **Why:** incremental builds decide what to rebuild from file timestamps. A file with an old timestamp can look unchanged even when its content is different.
+- **Know this:** this extends lesson 27. A mutant must change something that actually gets rebuilt, or its result means nothing. Force the rebuild (touch the file or use `dotnet build --no-incremental`) and confirm that a known mutant turns the expected tests red before trusting any green result.
+- **Interview line:** "A mutant only counts if it was really compiled. I check the build picked up the change, because a stale binary makes every mutant look harmless."
+
+### 45. A criterion the tests only nearly prove is a gap (T-005)
+
+- **What happened:** criterion 16 said each test database is "deleted when the host is disposed", but a host derived with `WithWebHostBuilder` or `WithClock` only had its file deleted when the class-fixture factory was disposed, at the end of the test class. The product owner chose to change the behaviour to match the wording rather than weaken it: `TicketsApiFactory` now overrides `CreateHost` and wraps each host it owns in `DatabaseOwningHost`, so the file (plus its `-wal` and `-shm` files) is deleted as soon as that host is disposed. Files a test chooses itself (`FixedDatabaseFactory`) are never deleted by a host. The product-manager recorded this in the ticket.
+- **Why:** the tests proved something close to the criterion, not the criterion itself, and nobody had decided whether "end of the class" was good enough. The existing end-of-class tests still passed with the per-host deletion removed, so new tests were needed to prove the "when the host is disposed" part.
+- **Know this:** when tests only approximately prove a criterion, raise it as a decision: change the code to match the text, or change the text (through the product-manager) to match the code. Either can be right, but the product owner chooses, and the choice is written down. A side note on the fix: `WebApplicationFactory` was always `IDisposable` and the tests already used `using`; what changed is what disposing a host does. The hook is `CreateHost` because `WithWebHostBuilderCore` is internal in Mvc.Testing 10.0.15 and can't be overridden.
+- **Interview line:** "If the tests only nearly prove a criterion, that's a gap to resolve with the product owner, not something to paper over. Either the code or the spec changes, on purpose."
+
+### 46. A derived test host silently drops Kestrel (T-005)
+
+- **What happened:** in Mvc.Testing 10.0.15, `kestrelFactory.WithWebHostBuilder(...)` built its host on the in-memory `TestServer`, because `UseKestrel` isn't inherited by the derived factory. Limits that only real Kestrel enforces, such as the maximum request body size, silently stopped applying. Worse, the derived factory's `CreateClient()` still reported the root host's real port in `BaseAddress`, so a "has a real port" check was fooled. Even after calling `derived.UseKestrel(0)`, `derived.CreateClient()` still targeted the root's port, so the requests wrote into the root host's database, not the derived one's.
+- **Why:** a derived factory is a new host with its own server, but some settings live on the root factory object and are not copied over, and the client helper does not tell you which server it actually talks to. The tests passed, but against the wrong server and the wrong database. The database-engineer found this by probing; the code reviewer had only suspected it.
+- **Know this:** the working recipe is to make the derived host use Kestrel, start it, and build the client from that host's own address, then assert what you are really running against:
+
+```
+var derived = factory.WithWebHostBuilder(_ => { });
+derived.UseKestrel(0); // not inherited from KestrelFactory
+
+// TestDatabaseCleanupTests.CreateKestrelClient
+static HttpClient CreateKestrelClient(WebApplicationFactory<Program> app)
+{
+    app.StartServer();
+    var address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()?.Addresses;
+    return app.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri(Assert.Single(address ?? [])) });
+}
+```
+
+- In `tests/TicketsApi.Tests/Data/TestDatabaseCleanupTests.cs`, `AssertRunsOnKestrel` then checks that the `IServer` is not `TestServer`, that its type name starts with "Kestrel", and that the server listens on the client's port. `AssertStoredInAsync` checks that the ticket landed in that host's own database file.
+
+- The general point: a green test only tells you something if it ran against what you think it ran against. Check the server type and where the data went, not only the status code.
+- **Interview line:** "A test passing isn't the same as a test testing the right thing. When a derived test host silently fell back to the in-memory server, we caught it by asserting the server type and which database got the write, not by trusting green."
+
+### 47. Verify an agent's "nothing left over" claim yourself (T-005)
+
+- **What happened:** the database-engineer reported 0 leftover `tickets-test-*.db` files before and after its work. The developer's own check found 32. Every one was timestamped during the agent's mutant runs, where deleting the files had been deliberately switched off. The developer moved them aside and ran the suite with a fresh before/after count: 0 and 0. That proved the real code doesn't leak files; only the experiments did.
+- **Why:** the agent's count didn't cover its own experiments. Mutant runs that turn off cleanup leave debris by design, and nobody had made the experiments clean up after themselves.
+- **Know this:** a verification an agent reports is itself a claim, and needs the same treatment as a review finding (lesson 42). Be extra careful after an agent has run destructive or mutating experiments, which can leave state behind just like a stale build can (lesson 44). Give experiments their own cleanup, and when you count, separate "left by the real code" from "left by the experiment" (here the timestamps did that).
+- **Interview line:** "When an agent says 'verified, nothing left over', I re-run the check myself. Here its 0 was really 32, all from its own experiments; a clean before/after run showed the product code was fine."

@@ -5,8 +5,8 @@ using static TicketsApi.Tests.Tickets.TicketTestHelpers;
 namespace TicketsApi.Tests.Tickets;
 
 // T-002 criteria 1-3 and 17.
-public class GetTicketTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>
+public class GetTicketTests(TicketsApiFactory factory)
+    : IClassFixture<TicketsApiFactory>
 {
     private const string Title = "Imprimante bloquée 🖨️";
     private const string Description = "Café renversé ☕";

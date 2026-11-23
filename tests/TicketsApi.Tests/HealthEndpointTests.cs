@@ -3,8 +3,8 @@ using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace TicketsApi.Tests;
 
-public class HealthEndpointTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>
+public class HealthEndpointTests(TicketsApiFactory factory)
+    : IClassFixture<TicketsApiFactory>
 {
     [Fact]
     public async Task Health_returns_200()

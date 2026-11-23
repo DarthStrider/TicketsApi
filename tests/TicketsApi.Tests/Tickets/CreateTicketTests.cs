@@ -7,8 +7,8 @@ using Microsoft.AspNetCore.Mvc.Testing;
 namespace TicketsApi.Tests.Tickets;
 
 // Unreadable bodies, 415, the body size cap and the encoding tests are in ErrorsAndLimitsTests (real Kestrel).
-public class CreateTicketTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>
+public class CreateTicketTests(TicketsApiFactory factory)
+    : IClassFixture<TicketsApiFactory>
 {
     private readonly HttpClient _client = factory.CreateClient();
 

@@ -9,8 +9,8 @@ namespace TicketsApi.Tests.Tickets;
 // T-003 criteria 1-19, 22, 23 and 27. Every test creates its own tickets, so sharing one host is safe.
 // Unreadable bodies, 415 and the body cap (criteria 20, 21) are in ChangeStatusLimitsTests (real Kestrel).
 // The races (criteria 24, 25) are in ChangeStatusConcurrencyTests.
-public class ChangeStatusTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>
+public class ChangeStatusTests(TicketsApiFactory factory)
+    : IClassFixture<TicketsApiFactory>
 {
     private readonly HttpClient _client = factory.CreateClient();
 
