@@ -276,3 +276,76 @@ using var document = await JsonDocument.ParseAsync(request.Body, cancellationTok
 - **Why:** edge cases in concurrency are product behaviour: they decide what a client sees. An agent that quietly picks one is making a product decision it doesn't own.
 - **Know this:** when a review finds behaviour the spec doesn't cover, stop, ask the decision-maker, record the answer in the ticket, then update tests and code. The order is spec, tests, code.
 - **Interview line:** "When agents find a gap in the spec, they propose options and the product owner decides. The decision goes into the acceptance criteria before any code changes."
+
+### 29. Middleware order decides what gets localized (T-004)
+
+- **What happened:** `UseRequestLocalization` runs first in `Program.cs`, before `UseExceptionHandler` and `UseStatusCodePages`. QA moved it after them as a mutant and 14 tests failed: the French titles for 413, 500, the non-GUID 404, 405 and 415 came back in English.
+- **Why:** middleware is a set of nested calls. Each one wraps everything registered after it. The exception handler and status-code pages write their response *after* the inner pipeline returns. The culture is stored per async flow, and a value set inside an inner call does not flow back out to the caller, so the outer error handlers still see the default culture.
+- **Know this:** register anything that sets up per-request context (culture, correlation ids) before the middleware that writes responses using it.
+
+```
+app.UseTicketsLocalization();   // sets the culture first
+app.UseExceptionHandler(...);   // its ProblemDetails is now localized
+app.UseStatusCodePages();
+```
+
+- **Interview line:** "Middleware wraps whatever comes after it, so context set further in isn't visible to the error handlers outside. Localization goes first, and a mutant that moves it proves the order matters."
+
+### 30. The exception handler clears response headers (T-004)
+
+- **What happened:** `Content-Language` and `Vary: Accept-Language` must be on every response. Set directly, they would disappear on the 413 and 500 responses. QA's first tests missed it: a "set Vary directly" mutant passed every test until the tests also checked `Vary` on responses written by the exception handler (the PATCH 413 and the 500).
+- **Why:** before writing its ProblemDetails, the exception handler clears the response, including its headers. Callbacks registered with `Response.OnStarting` are not cleared, and they run just before the headers are sent.
+- **Know this:**
+
+```
+context.Response.OnStarting(() =>
+{
+    context.Response.Headers.ContentLanguage = language;
+    context.Response.Headers.Append("Vary", "Accept-Language");
+    return Task.CompletedTask;
+});
+```
+
+- A header test only covers the code paths it calls. If a response can come from several places (the endpoint, status-code pages, the exception handler), test at least one of each.
+- **Interview line:** "The exception handler resets headers, so headers that must be on every response go in an OnStarting callback, and I test them on the exception path too, not just the happy path."
+
+### 31. UI culture vs formatting culture (T-004)
+
+- **What happened:** the security audit noted that if `Accept-Language: fr` also set `CurrentCulture`, number, date and string formatting would be under the client's control. That could break a later parse or change something like a rate-limit key. The fix keeps formatting in English and lets only the message language change. QA pinned it with a test that records both cultures inside a real request.
+- **Why:** .NET has two culture settings per thread. `CultureInfo.CurrentUICulture` picks which resource file (language) is used. `CultureInfo.CurrentCulture` drives `ToString`, parsing and comparison (for example `1.5` vs `1,5`).
+- **Know this:**
+
+```
+options.SupportedCultures   = [en];      // CurrentCulture: always English
+options.SupportedUICultures = [en, fr];  // CurrentUICulture: from Accept-Language
+```
+
+- **Interview line:** "I let the client choose the language of the messages, not how my server formats and parses data. Only the UI culture follows Accept-Language."
+
+### 32. Don't compare a value with itself (T-004)
+
+- **What happened:** the tests compare responses against a copy of the approved EN/FR table from the ticket (`Texts.cs`), not against the `.resx` files the code reads. A separate key-parity test reads the French resource set with `tryParents: false`.
+- **Why:** if the test read the same `.resx` as the code, it would only prove the wiring. A wrong translation would appear on both sides and pass. And a missing French key doesn't fail at runtime: .NET silently falls back to the English (parent) resource.
+- **Know this:** the expected value in a test must come from an independent source, here the spec. `GetResourceSet(culture, createIfNotExists: true, tryParents: false)` returns only the entries really in `Messages.fr.resx`, so a missing one shows up instead of being filled in from English.
+- **Interview line:** "Expected values come from the spec, not from the code under test, otherwise the test can't disagree with it. And I check that every translation key exists, because resource fallback hides missing ones."
+
+### 33. Fixed text can drift from the code (T-004)
+
+- **What happened:** messages like "Status must be one of: Open, ..." and "at most 200 characters" are now literal text in the resource files. The code reviewer pointed out that adding a status or changing a length limit would leave the messages silently wrong. A test now checks that the text contains every name from `Enum.GetNames<TicketStatus>()` and the length constants.
+- **Why:** moving text out of code into resources breaks the link the compiler used to give you. Nothing fails when the enum or the constant changes.
+- **Know this:** when a value is copied into text, write a test that ties the text back to its source in code.
+- **Interview line:** "Once a number or an enum list lives in a resource string, the compiler no longer protects it, so I add a test that ties the text to the constant."
+
+### 34. Green before the code isn't proof of value (T-004)
+
+- **What happened:** the framework's English messages already matched the ticket, so the English test cases passed before any localization code existed. They were proven useful with a mutant: setting the default culture to `fr` made 40 tests fail.
+- **Why:** when the expected value happens to equal the default behaviour, "write the test, watch it fail" never shows the failure. This is the same trap as lesson 20, in a new form.
+- **Know this:** a test earns trust when a realistic bug turns it red. If it is green from the start, make a mutant that would break the behaviour and confirm the test catches it (and, per lesson 27, confirm the mutant was really built and run).
+- **Interview line:** "A test that was green from day one hasn't proven anything yet. I break the code on purpose, and only a red result tells me the test is worth keeping."
+
+### 35. Check the framework before adding a package (T-004)
+
+- **What happened:** localization (`AddLocalization`, `UseRequestLocalization`, `IStringLocalizer`) needed no NuGet package. It is part of the ASP.NET Core shared framework that a web project already references.
+- **Why:** many features that used to be separate packages now ship in `Microsoft.AspNetCore.App`. Adding a package for them is unnecessary and can add a version to keep in sync.
+- **Know this:** before adding a package, check whether the API is already in the shared framework. This is part of the rule "never write a package version from memory": the best version to pick is often no package at all.
+- **Interview line:** "Before adding a dependency I check whether the framework already has it. For localization in ASP.NET Core it does, so there's nothing to install or upgrade."

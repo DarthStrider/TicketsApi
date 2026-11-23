@@ -2,7 +2,9 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Localization;
 using Microsoft.Net.Http.Headers;
+using TicketsApi.Localization;
 
 namespace TicketsApi.Features.Tickets;
 
@@ -34,9 +36,6 @@ public static class TicketsEndpoints
     // How many writes a status change tries before giving up with 409 (T-003 criterion 25).
     private const int MaxStatusWriteAttempts = 3;
 
-    private static readonly string StatusMustBeOneOf =
-        $"Status must be one of: {string.Join(", ", Enum.GetNames<TicketStatus>())}.";
-
     // Checks run in the order T-003 criterion 23 requires: route (404), content type (415), body (400),
     // lookup (404), transition (409).
     // The body is read here, not bound by the framework, for two reasons:
@@ -49,6 +48,7 @@ public static class TicketsEndpoints
             Guid id,
             HttpRequest request,
             ITicketStore store,
+            IStringLocalizer<Messages> localizer,
             CancellationToken cancellationToken)
     {
         if (!IsPlainJson(request.ContentType))
@@ -62,7 +62,7 @@ public static class TicketsEndpoints
             // The size cap (RequestSizeLimit) is enforced while reading: too large throws a 413 BadHttpRequestException.
             // The body is read as UTF-8, the encoding JSON requires (RFC 8259); a charset parameter is not transcoded.
             using var document = await JsonDocument.ParseAsync(request.Body, cancellationToken: cancellationToken);
-            if (!TryReadRequestedStatus(document.RootElement, out requested, out var errors))
+            if (!TryReadRequestedStatus(document.RootElement, localizer, out requested, out var errors))
             {
                 return TypedResults.ValidationProblem(errors);
             }
@@ -71,7 +71,7 @@ public static class TicketsEndpoints
         {
             return TypedResults.ValidationProblem(new Dictionary<string, string[]>
             {
-                ["body"] = ["The request body must be a valid JSON object."],
+                ["body"] = [localizer["BodyInvalid"]],
             });
         }
 
@@ -123,14 +123,17 @@ public static class TicketsEndpoints
     // T-003 criteria 12-19. Property names match case-insensitively, like the rest of the API's JSON binding,
     // so "status" and "Status" together count as a repeated key.
     private static bool TryReadRequestedStatus(
-        JsonElement body, out TicketStatus status, out Dictionary<string, string[]> errors)
+        JsonElement body,
+        IStringLocalizer<Messages> localizer,
+        out TicketStatus status,
+        out Dictionary<string, string[]> errors)
     {
         status = default;
         errors = new Dictionary<string, string[]>();
 
         if (body.ValueKind != JsonValueKind.Object)
         {
-            errors["body"] = ["The request body must be a valid JSON object."];
+            errors["body"] = [localizer["BodyInvalid"]];
             return false;
         }
 
@@ -139,19 +142,19 @@ public static class TicketsEndpoints
             .Select(p => p.Value)
             .ToList();
 
-        string? error = values switch
+        string? key = values switch
         {
-            [] => "Status is required.",
-            [{ ValueKind: JsonValueKind.Null }] => "Status is required.",
-            [{ ValueKind: not JsonValueKind.String }] => StatusMustBeOneOf,
-            [var value] when !TryParseStatus(value.GetString()!, out status) => StatusMustBeOneOf,
+            [] => "StatusRequired",
+            [{ ValueKind: JsonValueKind.Null }] => "StatusRequired",
+            [{ ValueKind: not JsonValueKind.String }] => "StatusMustBeOneOf",
+            [var value] when !TryParseStatus(value.GetString()!, out status) => "StatusMustBeOneOf",
             [_] => null,
-            _ => "Status must appear only once.",
+            _ => "StatusRepeated",
         };
 
-        if (error is not null)
+        if (key is not null)
         {
-            errors["status"] = [error];
+            errors["status"] = [localizer[key]];
             return false;
         }
 
@@ -175,6 +178,7 @@ public static class TicketsEndpoints
     private static async Task<Results<Ok<TicketListResponse>, ValidationProblem>> ListTicketsAsync(
         [FromQuery] string[]? status,
         ITicketStore store,
+        IStringLocalizer<Messages> localizer,
         CancellationToken cancellationToken)
     {
         TicketStatus? filter = null;
@@ -184,7 +188,7 @@ public static class TicketsEndpoints
             {
                 return TypedResults.ValidationProblem(new Dictionary<string, string[]>
                 {
-                    ["status"] = [StatusMustBeOneOf],
+                    ["status"] = [localizer["StatusMustBeOneOf"]],
                 });
             }
 
@@ -219,11 +223,12 @@ public static class TicketsEndpoints
     private static async Task<Results<Created<TicketResponse>, ValidationProblem>> CreateTicketAsync(
         CreateTicketRequest request,
         ITicketStore store,
+        IStringLocalizer<Messages> localizer,
         TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
         var title = request.Title?.Trim();
-        if (!IsValid(title, request.Description, out var errors))
+        if (!IsValid(title, request.Description, localizer, out var errors))
         {
             return TypedResults.ValidationProblem(errors);
         }
@@ -247,22 +252,23 @@ public static class TicketsEndpoints
     private static bool IsValid(
         [NotNullWhen(true)] string? title,
         string? description,
+        IStringLocalizer<Messages> localizer,
         out Dictionary<string, string[]> errors)
     {
         errors = new Dictionary<string, string[]>();
 
         if (string.IsNullOrEmpty(title))
         {
-            errors["title"] = ["Title is required."];
+            errors["title"] = [localizer["TitleRequired"]];
         }
         else if (title.Length > TitleMaxLength)
         {
-            errors["title"] = [$"Title must be at most {TitleMaxLength} characters."];
+            errors["title"] = [localizer["TitleTooLong"]];
         }
 
         if (description is { Length: > DescriptionMaxLength })
         {
-            errors["description"] = [$"Description must be at most {DescriptionMaxLength} characters."];
+            errors["description"] = [localizer["DescriptionTooLong"]];
         }
 
         // The null check is redundant at runtime (null already added an error) but lets the compiler prove it.
