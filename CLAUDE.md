@@ -31,6 +31,21 @@ A small ASP.NET Core Web API for support tickets. It's a learning project for di
 - Inject dependencies through the constructor or the endpoint parameters. No static service locators.
 - Every endpoint needs integration tests covering the happy path and the validation failure.
 
+## Design principles
+Write code by `docs/design-principles.md` (*Clean Code* and *A Philosophy of Software Design*). Read it before
+coding a ticket. The short version:
+- Use explicit types, not `var`. Use target-typed `new()` when the type is already on the left. Anonymous types are
+  the only exception.
+- Use precise, domain names. Don't use abbreviations or vague words like `data`, `helper` or `Process`.
+- A function does one thing at one level of abstraction. Prefer deep modules (a simple interface hiding real work)
+  over many shallow pass-through pieces.
+- Hide each design decision in one place. If two places must change together, that's information leakage.
+- No boolean flag parameters, and no hidden side effects.
+- Comments explain why, not what. Update or delete them when the code changes.
+- Expected failures return ProblemDetails. Never swallow exceptions, and don't hide nullability with `!`.
+- Design it twice: each plan names at least one alternative and why it wasn't chosen.
+- Boy Scout Rule only within the lines the ticket touches. Suggest bigger cleanups as a new ticket.
+
 ## Workflow rules
 - Before writing code for a ticket, explore and then present a plan. Wait for approval.
 - Write or update tests first, and confirm they fail before implementing.
