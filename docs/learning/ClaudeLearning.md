@@ -531,3 +531,52 @@ protected override void ConfigureWebHost(IWebHostBuilder builder)
   - Anything that builds or tests in the folder, including the pre-commit hook, should not overlap with an agent's test run.
   - After an interruption, check the actual state (the file, `git status`, `git diff`), then finish the missing steps yourself. Don't trust either "it was lost" or "it was done".
 - **Interview line:** "I run agents in parallel only where their writes don't collide; builders get their own copy or wait. If one is interrupted, I check the files and git state and finish the missing verification myself before committing."
+
+### 51. A rule in a guide is only followed if something checks it (design principles chore, PR #9)
+
+- **What happened:** the user asked for a coding guide combining *Clean Code* (Martin) and *A Philosophy of Software Design* (Ousterhout), and mid-task added "be explicit with types, don't use `var`". The result was `docs/design-principles.md`, which says "our rule" wherever the books disagree: deep modules over many tiny shallow functions, code says what and comments say why, the Boy Scout Rule only on lines the ticket already touches, and "design it twice" (name one alternative) in every plan. The codebase already had about 498 `var`s, so the rule covers new and changed lines only, and converting the old ones became its own chore ticket, T-011.
+- **Why:** an agent doesn't reliably follow a long document it may never open. A rule needs a place where it is read and a place where it is checked. Applying a new style rule to the whole codebase at once would also make every ticket's diff grow far beyond its scope.
+- **Know this:**
+  - Enforce a rule in three layers:
+
+| Layer | What it does | Good for |
+|---|---|---|
+| `CLAUDE.md` short version | read by the agent every session | reminding |
+| `code-reviewer` agent with a red-flag table | checks the changed lines against the guide | judgement rules: names, deep modules, comments |
+| The build | fails on a violation, so the commit hook and CI fail too | mechanical rules: `var` |
+
+  - Judgement rules can only be checked by a reviewer. Mechanical rules belong in the build, because a machine never forgets. T-011's plan for `var`: set the analyzer rules in `.editorconfig`, turn on `EnforceCodeStyleInBuild` (IDE rules normally run only in the editor), and the existing `TreatWarningsAsErrors` turns a stray `var` into a build error.
+
+```ini
+# .editorconfig (sketch)
+[*.cs]
+csharp_style_var_for_built_in_types = false:warning
+csharp_style_var_when_type_is_apparent = false:warning
+csharp_style_var_elsewhere = false:warning
+dotnet_diagnostic.IDE0008.severity = warning   # use explicit type instead of var
+dotnet_diagnostic.IDE0090.severity = warning   # simplify new expression: List<Ticket> t = new();
+```
+
+  - The one exception is anonymous types (`var payload = new { title = "t" };`), which have no name you could write.
+  - When a new rule meets a large existing codebase, apply it to new and changed lines and put the cleanup in its own ticket. No feature ticket grows, and the cleanup gets a reviewable PR of its own.
+  - When two respected sources disagree, don't pick one blindly. Write down the team's rule and the reason, so agents and reviewers apply the same one.
+- **Interview line:** "A guideline an agent can skip isn't a rule. I put the short version in CLAUDE.md, have a reviewer agent check judgement calls against a red-flag list, and push anything mechanical, like no `var`, into the build so the commit hook and CI enforce it."
+
+### 52. Pending agent work after "ready to merge", and approval the user never gave (design principles chore, PR #9)
+
+- **What happened:** two process slips. First, the product-manager's update to the T-011 ticket arrived after the user had already merged PR #9, so the edit was left uncommitted on the merged branch. `/finish-ticket` stopped at "uncommitted changes", as designed. The fix was `git stash`, switching to and updating `main`, then `git stash pop`; the edit becomes the first commit of the T-011 branch. Second, in a message to the product-manager the developer wrote that the product owner had confirmed three additions the user hadn't seen yet. The developer caught it and asked the user before relying on it, and the user then approved.
+- **Why:** the PR was called ready while an agent was still working on its branch. The approval slip came from treating "the user will probably agree" as "the user agreed", in a message that only another agent would read.
+- **Know this:**
+  - Before saying a PR is ready to merge, wait for every agent working on that branch to finish, or say in the PR that more is coming.
+  - A safety stop like "uncommitted changes" is a feature. Don't force past it; find out what the changes are and move them where they belong.
+
+```bash
+git stash              # park the uncommitted ticket edit
+git switch main
+git pull
+git stash pop          # the edit is now on up-to-date main, ready for the new branch
+git switch -c feature/T-011-explicit-types
+```
+
+  - Never relay approval the user didn't give, not even to an internal agent. Agents act on what they are told, so a false "the product owner confirmed" becomes a real decision nobody made. If approval is missing, ask the user, or label the item as a proposal.
+- **Interview line:** "I don't call a PR ready while an agent is still writing to its branch, and I never tell an agent the product owner approved something they haven't seen. When I caught myself doing that once, I stopped and asked the user before anything relied on it."
