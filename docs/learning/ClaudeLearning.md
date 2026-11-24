@@ -509,3 +509,25 @@ protected override void ConfigureWebHost(IWebHostBuilder builder)
   - Rerunning the job from the CLI was blocked because the fine-grained token had no Actions write permission. The user reran it from the GitHub page instead of widening the token: least privilege beats convenience.
   - The episode led to a read-only `devops-engineer` agent (PR #6) for CI investigations.
 - **Interview line:** "A test that fails once in 260 runs is still a bug. I compared runs to rule out the merge, read the framework source to find the race, reproduced it under parallel load, and fixed the cause, not the symptom."
+
+### 49. One owner per concern, with clear write limits (T-005)
+
+- **What happened:** during the T-005 work two new subagents were added, each in its own chore PR rather than inside the ticket: a `database-engineer` (PR #5), which may write tests only in `tests/TicketsApi.Tests/Data/` while QA keeps the final PASS/FAIL, and a read-only `devops-engineer` (PR #6). Both paid off on their first runs. The database-engineer found that a host derived from `KestrelFactory` silently ran on `TestServer` (lesson 46). The devops-engineer's pre-PR check ran the exact CI steps on a clean copy of the repo, with both CRLF and LF line endings, found nothing Windows-only, and said plainly that this did not prove Linux. The first Linux CI run of the new derived-host Kestrel tests then passed.
+- **Why:** the generalist roles (developer, QA, reviewer) had no one whose job was to probe the database layer or the pipeline, so problems there were only suspected, not proven. Adding the roles is a tooling change, and mixing it into a feature PR would make the feature harder to review and to revert.
+- **Know this:**
+  - Give each concern one owner, and write its limits into the agent definition: what it may read, what it may write, and who decides. "Writes tests only in `Data/`, QA gives the verdict" avoids two agents fighting over the same files or the same sign-off.
+  - Read-only agents (reviewer, security, devops) propose; they never edit, rerun, push or merge. That is least privilege (lesson 5) applied to agents.
+  - Keep changes to agents, hooks, CI and settings in their own small PRs. The feature PR then contains only the feature.
+  - A good report states its limits. "Same result on CRLF and LF, Linux not proven" is more useful than "works on all platforms", and CI on Linux was the real proof.
+- **Interview line:** "I give each concern an agent with a clear owner and clear write limits, and I add those agents in their own PRs, not inside a feature. The new database agent found a silent test-server fallback on its first run."
+
+### 50. Running several agents in parallel in one folder (T-005)
+
+- **What happened:** QA, the code-reviewer and the devops-engineer ran at the same time in the same working folder. To avoid clashing over locked files, the devops-engineer worked only in a throwaway copy. Even so, agents saw each other's temp files: QA's leftover-file count included one temp database from the reviewer's concurrent test run. The developer held back a commit until QA's test run had finished, because the commit hook runs `dotnet build` and `dotnet test` in the same folder. Later a session restart interrupted a QA agent. Its edit had already landed, so the developer read the file instead of assuming the change was lost or complete, ran the checks QA never got to, and then committed.
+- **Why:** agents running in parallel share one disk: the same `bin/` and `obj/` folders, the same temp folder and the same git index. On Windows, a running test host locks dlls and SQLite files, so a second build or test run in the same folder can fail or count the wrong files. An interrupted agent leaves its work in an unknown state: some steps done, others not.
+- **Know this:**
+  - Parallel agents are safe when their writes don't overlap. Read-only work is easy to run alongside; anything that builds, tests or writes should get its own copy of the repo (a throwaway copy or a `git worktree`) or wait its turn.
+  - Shared resources make measurements noisy. A count of leftover files is only meaningful if nothing else is creating files at the same time (compare lesson 47).
+  - Anything that builds or tests in the folder, including the pre-commit hook, should not overlap with an agent's test run.
+  - After an interruption, check the actual state (the file, `git status`, `git diff`), then finish the missing steps yourself. Don't trust either "it was lost" or "it was done".
+- **Interview line:** "I run agents in parallel only where their writes don't collide; builders get their own copy or wait. If one is interrupted, I check the files and git state and finish the missing verification myself before committing."
