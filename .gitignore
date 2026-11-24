@@ -5,3 +5,9 @@ obj/
 TestResults/
 .claude/settings.local.json
 .env
+HANDOFF.md
+# SQLite databases (T-005): never committed
+*.db
+*.db-wal
+*.db-shm
+App_Data/

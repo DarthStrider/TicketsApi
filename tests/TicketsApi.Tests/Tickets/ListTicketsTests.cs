@@ -6,8 +6,8 @@ using static TicketsApi.Tests.Tickets.TicketTestHelpers;
 namespace TicketsApi.Tests.Tickets;
 
 // T-002 criteria 4-17. Every test gets its own host (WithClock), so the store starts empty.
-public class ListTicketsTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>
+public class ListTicketsTests(TicketsApiFactory factory)
+    : IClassFixture<TicketsApiFactory>
 {
     private static readonly DateTimeOffset T0 = new(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
 

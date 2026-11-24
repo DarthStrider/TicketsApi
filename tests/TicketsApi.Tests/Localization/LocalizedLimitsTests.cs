@@ -42,8 +42,8 @@ public abstract class LocalizedLimitsTests<TFactory> : IClassFixture<TFactory>
             url = $"/tickets/{id}/status";
         }
 
-        var response = await _client.SendAsync(
-            patch ? HttpMethod.Patch : HttpMethod.Post, url, Texts.Header(language), tooLarge);
+        var response = await OverCapRequests.SendAsync(
+            _client, patch ? HttpMethod.Patch : HttpMethod.Post, url, tooLarge, Texts.Header(language));
 
         var body = await AssertProblemDetailsAsync(response, HttpStatusCode.RequestEntityTooLarge);
         Assert.Equal(Texts.Get("Title413", language), body.GetProperty("title").GetString());

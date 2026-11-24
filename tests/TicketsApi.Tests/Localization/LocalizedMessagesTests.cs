@@ -13,8 +13,8 @@ namespace TicketsApi.Tests.Localization;
 
 // T-004 criteria 8-14, 17 and 18: the exact EN/FR text of every message and title, and what must not change.
 // "en" sends no header (the default); "fr" sends Accept-Language: fr.
-public class LocalizedMessagesTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>
+public class LocalizedMessagesTests(TicketsApiFactory factory)
+    : IClassFixture<TicketsApiFactory>
 {
     private readonly HttpClient _client = factory.CreateClient();
 

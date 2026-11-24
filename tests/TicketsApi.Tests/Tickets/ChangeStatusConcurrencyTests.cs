@@ -9,8 +9,8 @@ namespace TicketsApi.Tests.Tickets;
 // T-003 criterion 24: a status change is an atomic check-and-set.
 // T-003 criterion 25: a change that loses the race is re-evaluated against the new status.
 // Each test uses its own host, so the hooks it sets can't affect other tests.
-public class ChangeStatusConcurrencyTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>
+public class ChangeStatusConcurrencyTests(TicketsApiFactory factory)
+    : IClassFixture<TicketsApiFactory>
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
 

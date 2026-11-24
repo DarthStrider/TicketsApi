@@ -133,7 +133,8 @@ public abstract class ChangeStatusLimitsTests<TFactory> : IClassFixture<TFactory
     {
         var id = await NewTicketIdAsync();
 
-        var response = await _client.PatchStatusRawAsync(id, ValidBodyOfSize(Cap + 1));
+        var response = await OverCapRequests.SendAsync(
+            _client, HttpMethod.Patch, $"/tickets/{id}/status", ValidBodyOfSize(Cap + 1));
 
         await AssertProblemDetailsAsync(response, HttpStatusCode.RequestEntityTooLarge);
     }

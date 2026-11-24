@@ -12,9 +12,9 @@ public enum TicketStatus
     Closed,
 }
 
-// Immutable on purpose: a status change stores a new Ticket. InMemoryTicketStore's compare-and-swap relies on reference
-// identity meaning "unchanged since read" (T-003 criterion 24), so don't add setters or override Equals,
-// and don't make this a record.
+// Immutable on purpose: a status change writes a new row version and returns a new Ticket, never mutates one.
+// "Unchanged since read" is decided by the database's Version column (T-005 criterion 8), which is deliberately
+// not a property here, so it can never reach a response.
 internal sealed class Ticket
 {
     public required Guid Id { get; init; }
