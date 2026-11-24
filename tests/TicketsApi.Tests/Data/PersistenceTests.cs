@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
@@ -19,23 +20,23 @@ public class PersistenceTests(TicketsApiFactory factory) : IClassFixture<Tickets
     [Fact]
     public async Task Data_survives_a_restart()
     {
-        var ct = TestContext.Current.CancellationToken;
-        var path = TicketsApiFactory.NewDatabasePath();
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        string path = TicketsApiFactory.NewDatabasePath();
         try
         {
             string created;
             Guid id;
-            using (var first = new FixedDatabaseFactory(path))
+            using (FixedDatabaseFactory first = new(path))
             {
-                var client = first.CreateClient();
+                HttpClient client = first.CreateClient();
                 id = (await client.CreateTicketAsync("Survives", "a restart")).GetProperty("id").GetGuid();
-                var patch = await client.PatchStatusAsync(id, new { status = "InProgress" });
+                HttpResponseMessage patch = await client.PatchStatusAsync(id, new { status = "InProgress" });
                 Assert.Equal(HttpStatusCode.OK, patch.StatusCode);
                 created = await patch.Content.ReadAsStringAsync(ct);
             }
 
-            using var second = new FixedDatabaseFactory(path);
-            var response = await second.CreateClient().GetAsync($"/tickets/{id}", ct);
+            using FixedDatabaseFactory second = new(path);
+            HttpResponseMessage response = await second.CreateClient().GetAsync($"/tickets/{id}", ct);
 
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Equal(created, await response.Content.ReadAsStringAsync(ct));
@@ -51,13 +52,13 @@ public class PersistenceTests(TicketsApiFactory factory) : IClassFixture<Tickets
     [Fact]
     public async Task Parallel_hosts_do_not_share_tickets()
     {
-        var ct = TestContext.Current.CancellationToken;
-        using var a = factory.WithWebHostBuilder(_ => { });
-        using var b = factory.WithWebHostBuilder(_ => { });
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        using WebApplicationFactory<Program> a = factory.WithWebHostBuilder(_ => { });
+        using WebApplicationFactory<Program> b = factory.WithWebHostBuilder(_ => { });
 
         await a.CreateClient().CreateTicketAsync("only in A");
-        var inA = await ReadJsonAsync(await a.CreateClient().GetAsync("/tickets", ct), ct);
-        var inB = await ReadJsonAsync(await b.CreateClient().GetAsync("/tickets", ct), ct);
+        JsonElement inA = await ReadJsonAsync(await a.CreateClient().GetAsync("/tickets", ct), ct);
+        JsonElement inB = await ReadJsonAsync(await b.CreateClient().GetAsync("/tickets", ct), ct);
 
         Assert.Equal(1, inA.GetProperty("items").GetArrayLength()); // so B's 0 can't pass because reads are broken
         Assert.Equal(0, inB.GetProperty("items").GetArrayLength());
@@ -75,13 +76,13 @@ public class PersistenceTests(TicketsApiFactory factory) : IClassFixture<Tickets
     [InlineData("empty")]
     public async Task Text_and_created_at_round_trip_exactly(string descriptionCase)
     {
-        var ct = TestContext.Current.CancellationToken;
+        CancellationToken ct = TestContext.Current.CancellationToken;
         Assert.Equal(200, MaxTitle.Length);
         Assert.Equal(4000, MaxDescription.Length);
 
         // A time with every one of the seven sub-second digits set (100 ns ticks).
-        using var app = factory.WithClock(new TestClock(T0.AddTicks(1_234_567)));
-        var client = app.CreateClient();
+        using WebApplicationFactory<Program> app = factory.WithClock(new TestClock(T0.AddTicks(1_234_567)));
+        HttpClient client = app.CreateClient();
         string? description = descriptionCase switch
         {
             "max" => MaxDescription,
@@ -89,10 +90,10 @@ public class PersistenceTests(TicketsApiFactory factory) : IClassFixture<Tickets
             _ => null,
         };
 
-        var created = await client.CreateTicketAsync(MaxTitle, description);
-        var id = created.GetProperty("id").GetGuid();
-        var get = await ReadJsonAsync(await client.GetAsync($"/tickets/{id}", ct), ct);
-        var list = await ReadJsonAsync(await client.GetAsync("/tickets", ct), ct);
+        JsonElement created = await client.CreateTicketAsync(MaxTitle, description);
+        Guid id = created.GetProperty("id").GetGuid();
+        JsonElement get = await ReadJsonAsync(await client.GetAsync($"/tickets/{id}", ct), ct);
+        JsonElement list = await ReadJsonAsync(await client.GetAsync("/tickets", ct), ct);
 
         Assert.Equal("2026-01-01T12:00:00.1234567+00:00", created.GetProperty("createdAt").GetString());
         Assert.Equal(created.GetRawText(), get.GetRawText());
@@ -106,27 +107,27 @@ public class PersistenceTests(TicketsApiFactory factory) : IClassFixture<Tickets
     [Fact]
     public async Task Storage_format_is_as_specified()
     {
-        var path = TicketsApiFactory.NewDatabasePath();
+        string path = TicketsApiFactory.NewDatabasePath();
         try
         {
             Guid id;
             DateTimeOffset createdAt;
-            using (var app = new FixedDatabaseFactory(path))
+            using (FixedDatabaseFactory app = new(path))
             {
-                var client = app.CreateClient();
-                var created = await client.CreateTicketAsync("Stored");
+                HttpClient client = app.CreateClient();
+                JsonElement created = await client.CreateTicketAsync("Stored");
                 id = created.GetProperty("id").GetGuid();
                 createdAt = created.GetProperty("createdAt").GetDateTimeOffset();
                 await client.PatchStatusAsync(id, new { status = "InProgress" });
                 await client.PatchStatusAsync(id, new { status = "Resolved" });
             }
 
-            await using var connection = new SqliteConnection($"Data Source={path};Mode=ReadOnly;Pooling=False");
+            await using SqliteConnection connection = new($"Data Source={path};Mode=ReadOnly;Pooling=False");
             await connection.OpenAsync(TestContext.Current.CancellationToken);
-            await using var command = connection.CreateCommand();
+            await using SqliteCommand command = connection.CreateCommand();
             command.CommandText =
                 "SELECT Id, typeof(Id), Status, typeof(Status), CreatedAt, typeof(CreatedAt), Version FROM Tickets";
-            await using var reader = await command.ExecuteReaderAsync(TestContext.Current.CancellationToken);
+            await using SqliteDataReader reader = await command.ExecuteReaderAsync(TestContext.Current.CancellationToken);
 
             Assert.True(await reader.ReadAsync(TestContext.Current.CancellationToken));
             Assert.Equal(id.ToString().ToUpperInvariant(), reader.GetString(0)); // criterion 6: uppercase TEXT id
@@ -149,26 +150,26 @@ public class PersistenceTests(TicketsApiFactory factory) : IClassFixture<Tickets
     [Fact]
     public async Task Version_is_not_exposed()
     {
-        var ct = TestContext.Current.CancellationToken;
-        var client = factory.CreateClient();
-        var post = await client.PostAsJsonAsync("/tickets", new { title = "No version" }, ct);
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        HttpClient client = factory.CreateClient();
+        HttpResponseMessage post = await client.PostAsJsonAsync("/tickets", new { title = "No version" }, ct);
         Assert.Equal(HttpStatusCode.Created, post.StatusCode);
-        var postBody = await ReadJsonAsync(post, ct);
-        var id = postBody.GetProperty("id").GetGuid();
+        JsonElement postBody = await ReadJsonAsync(post, ct);
+        Guid id = postBody.GetProperty("id").GetGuid();
 
-        var patch = await client.PatchStatusAsync(id, new { status = "InProgress" });
-        var get = await client.GetAsync($"/tickets/{id}", ct);
-        var list = await client.GetAsync("/tickets", ct);
+        HttpResponseMessage patch = await client.PatchStatusAsync(id, new { status = "InProgress" });
+        HttpResponseMessage get = await client.GetAsync($"/tickets/{id}", ct);
+        HttpResponseMessage list = await client.GetAsync("/tickets", ct);
 
         string[] fields = ["id", "title", "description", "status", "createdAt"];
-        foreach (var response in new[] { post, patch, get, list })
+        foreach (HttpResponseMessage response in new[] { post, patch, get, list })
         {
-            var headers = response.Headers.Concat(response.Content.Headers).Select(h => h.Key).ToList();
+            List<string> headers = response.Headers.Concat(response.Content.Headers).Select(h => h.Key).ToList();
             Assert.DoesNotContain(headers, h => h.Contains("ETag", StringComparison.OrdinalIgnoreCase));
             Assert.DoesNotContain(headers, h => h.Contains("Version", StringComparison.OrdinalIgnoreCase));
 
-            var body = response == post ? postBody : await ReadJsonAsync(response, ct);
-            var tickets = response == list ? body.GetProperty("items").EnumerateArray().ToList() : [body];
+            JsonElement body = response == post ? postBody : await ReadJsonAsync(response, ct);
+            List<JsonElement> tickets = response == list ? body.GetProperty("items").EnumerateArray().ToList() : [body];
             Assert.NotEmpty(tickets);
             Assert.All(tickets, ticket => Assert.Equal(fields, ticket.EnumerateObject().Select(p => p.Name)));
         }
@@ -182,10 +183,10 @@ public class PersistenceTests(TicketsApiFactory factory) : IClassFixture<Tickets
     [InlineData("   ")]
     public void Missing_connection_string_fails_startup(string? value)
     {
-        using var app = factory.WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) =>
+        using WebApplicationFactory<Program> app = factory.WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) =>
             config.AddInMemoryCollection(new Dictionary<string, string?> { ["ConnectionStrings:Tickets"] = value })));
 
-        var error = StartupError(() => app.CreateClient());
+        InvalidOperationException error = StartupError(() => app.CreateClient());
 
         Assert.Contains("connection string 'ConnectionStrings:Tickets' is missing", error.Message);
     }
@@ -195,12 +196,12 @@ public class PersistenceTests(TicketsApiFactory factory) : IClassFixture<Tickets
     [Fact]
     public async Task Development_host_migrates_an_empty_database()
     {
-        var path = TicketsApiFactory.NewDatabasePath();
+        string path = TicketsApiFactory.NewDatabasePath();
         try
         {
-            using var app = new FixedDatabaseFactory(path, applyMigrations: false);
+            using FixedDatabaseFactory app = new(path, applyMigrations: false);
 
-            var response = await app.CreateClient().PostAsync(
+            HttpResponseMessage response = await app.CreateClient().PostAsync(
                 "/tickets",
                 new StringContent("""{ "title": "migrated" }""", System.Text.Encoding.UTF8, "application/json"),
                 TestContext.Current.CancellationToken);
@@ -219,13 +220,13 @@ public class PersistenceTests(TicketsApiFactory factory) : IClassFixture<Tickets
     [InlineData("Staging")]
     public void Non_development_with_pending_migrations_fails_startup(string environment)
     {
-        var path = TicketsApiFactory.NewDatabasePath();
+        string path = TicketsApiFactory.NewDatabasePath();
         try
         {
-            using var root = new FixedDatabaseFactory(path, applyMigrations: false);
-            using var app = root.WithWebHostBuilder(builder => builder.UseEnvironment(environment));
+            using FixedDatabaseFactory root = new(path, applyMigrations: false);
+            using WebApplicationFactory<Program> app = root.WithWebHostBuilder(builder => builder.UseEnvironment(environment));
 
-            var error = StartupError(() => app.CreateClient());
+            InvalidOperationException error = StartupError(() => app.CreateClient());
 
             Assert.Contains("pending migrations", error.Message);
             Assert.Contains("InitialCreate", error.Message);
@@ -240,11 +241,11 @@ public class PersistenceTests(TicketsApiFactory factory) : IClassFixture<Tickets
     // stack trace, so an unrelated exception from EF's Migrations namespace can't make the test pass.
     private static InvalidOperationException StartupError(Action start)
     {
-        var error = Record.Exception(start);
+        Exception? error = Record.Exception(start);
         Assert.NotNull(error);
 
         // InnerException also walks into an AggregateException (it returns the first inner exception).
-        for (var current = error; current is not null; current = current.InnerException)
+        for (Exception? current = error; current is not null; current = current.InnerException)
         {
             if (current is InvalidOperationException found && current.Source == "TicketsApi")
             {

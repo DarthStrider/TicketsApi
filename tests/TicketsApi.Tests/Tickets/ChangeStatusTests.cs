@@ -29,15 +29,15 @@ public class ChangeStatusTests(TicketsApiFactory factory)
     [Fact]
     public async Task Patch_open_to_in_progress_returns_200_with_full_ticket()
     {
-        var ct = TestContext.Current.CancellationToken;
-        var created = await _client.CreateTicketAsync("Printer jammed", "Floor 3");
-        var id = created.GetProperty("id").GetGuid();
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        JsonElement created = await _client.CreateTicketAsync("Printer jammed", "Floor 3");
+        Guid id = created.GetProperty("id").GetGuid();
 
-        var response = await _client.PatchStatusAsync(id, new { status = "InProgress" });
+        HttpResponseMessage response = await _client.PatchStatusAsync(id, new { status = "InProgress" });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
-        var body = await ReadJsonAsync(response, ct);
+        JsonElement body = await ReadJsonAsync(response, ct);
         Assert.Equal(
             ["id", "title", "description", "status", "createdAt"],
             body.EnumerateObject().Select(p => p.Name));
@@ -66,12 +66,12 @@ public class ChangeStatusTests(TicketsApiFactory factory)
     [MemberData(nameof(AllowedTransitions))]
     public async Task Allowed_transition_returns_200_with_new_status(string from, string to)
     {
-        var id = await _client.CreateTicketInStatusAsync(from);
+        Guid id = await _client.CreateTicketInStatusAsync(from);
 
-        var response = await _client.PatchStatusAsync(id, new { status = to });
+        HttpResponseMessage response = await _client.PatchStatusAsync(id, new { status = to });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await ReadJsonAsync(response, TestContext.Current.CancellationToken);
+        JsonElement body = await ReadJsonAsync(response, TestContext.Current.CancellationToken);
         Assert.Equal(to, body.GetProperty("status").GetString()); // canonical name, never a number (AC1)
     }
 
@@ -80,16 +80,16 @@ public class ChangeStatusTests(TicketsApiFactory factory)
     [Fact]
     public async Task Get_after_patch_shows_new_status_and_other_fields_unchanged()
     {
-        var ct = TestContext.Current.CancellationToken;
-        var created = await _client.CreateTicketAsync("Imprimante bloquée 🖨️", "Café renversé ☕");
-        var id = created.GetProperty("id").GetGuid();
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        JsonElement created = await _client.CreateTicketAsync("Imprimante bloquée 🖨️", "Café renversé ☕");
+        Guid id = created.GetProperty("id").GetGuid();
 
-        var patch = await _client.PatchStatusAsync(id, new { status = "Closed" });
+        HttpResponseMessage patch = await _client.PatchStatusAsync(id, new { status = "Closed" });
         Assert.Equal(HttpStatusCode.OK, patch.StatusCode);
-        var body = await ReadJsonAsync(await _client.GetAsync($"/tickets/{id}", ct), ct);
+        JsonElement body = await ReadJsonAsync(await _client.GetAsync($"/tickets/{id}", ct), ct);
 
         Assert.Equal("Closed", body.GetProperty("status").GetString());
-        foreach (var field in new[] { "id", "title", "description", "createdAt" })
+        foreach (string field in new[] { "id", "title", "description", "createdAt" })
         {
             Assert.Equal(created.GetProperty(field).GetRawText(), body.GetProperty(field).GetRawText());
         }
@@ -105,11 +105,11 @@ public class ChangeStatusTests(TicketsApiFactory factory)
     [InlineData("Closed")]
     public async Task Same_status_is_a_noop_200(string status)
     {
-        var ct = TestContext.Current.CancellationToken;
-        var id = await _client.CreateTicketInStatusAsync(status);
-        var before = await (await _client.GetAsync($"/tickets/{id}", ct)).Content.ReadAsStringAsync(ct);
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        Guid id = await _client.CreateTicketInStatusAsync(status);
+        string before = await (await _client.GetAsync($"/tickets/{id}", ct)).Content.ReadAsStringAsync(ct);
 
-        var response = await _client.PatchStatusAsync(id, new { status });
+        HttpResponseMessage response = await _client.PatchStatusAsync(id, new { status });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(before, await response.Content.ReadAsStringAsync(ct));
@@ -138,13 +138,13 @@ public class ChangeStatusTests(TicketsApiFactory factory)
     [MemberData(nameof(DisallowedTransitions))]
     public async Task Disallowed_transition_returns_409_and_leaves_ticket_unchanged(string from, string to)
     {
-        var ct = TestContext.Current.CancellationToken;
-        var id = await _client.CreateTicketInStatusAsync(from);
-        var before = await (await _client.GetAsync($"/tickets/{id}", ct)).Content.ReadAsStringAsync(ct);
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        Guid id = await _client.CreateTicketInStatusAsync(from);
+        string before = await (await _client.GetAsync($"/tickets/{id}", ct)).Content.ReadAsStringAsync(ct);
 
-        var response = await _client.PatchStatusAsync(id, new { status = to });
+        HttpResponseMessage response = await _client.PatchStatusAsync(id, new { status = to });
 
-        var problem = await AssertProblemDetailsAsync(response, HttpStatusCode.Conflict);
+        JsonElement problem = await AssertProblemDetailsAsync(response, HttpStatusCode.Conflict);
         Assert.Equal(from, problem.GetProperty("currentStatus").GetString());
         Assert.Equal(to, problem.GetProperty("requestedStatus").GetString());
         Assert.False(problem.TryGetProperty("allowedStatuses", out _), "409 must not list allowed statuses.");
@@ -156,11 +156,11 @@ public class ChangeStatusTests(TicketsApiFactory factory)
     [Fact]
     public async Task Conflict_reports_canonical_requested_status()
     {
-        var id = await _client.CreateTicketInStatusAsync("Open");
+        Guid id = await _client.CreateTicketInStatusAsync("Open");
 
-        var response = await _client.PatchStatusAsync(id, new { status = "resolved" });
+        HttpResponseMessage response = await _client.PatchStatusAsync(id, new { status = "resolved" });
 
-        var problem = await AssertProblemDetailsAsync(response, HttpStatusCode.Conflict);
+        JsonElement problem = await AssertProblemDetailsAsync(response, HttpStatusCode.Conflict);
         Assert.Equal("Resolved", problem.GetProperty("requestedStatus").GetString());
     }
 
@@ -168,12 +168,12 @@ public class ChangeStatusTests(TicketsApiFactory factory)
     [Fact]
     public void Transition_cases_cover_every_pair()
     {
-        var pairs = AllowedTransitions.Concat(DisallowedTransitions)
+        List<(string, string)> pairs = AllowedTransitions.Concat(DisallowedTransitions)
             .Select(row => row.Data)
             .Concat(Statuses.Select(s => (s, s)))
             .ToList();
 
-        var all = Statuses.SelectMany(f => Statuses.Select(t => (f, t))).ToList();
+        List<(string f, string t)> all = Statuses.SelectMany(f => Statuses.Select(t => (f, t))).ToList();
         Assert.Equal(all.Count, pairs.Count);
         Assert.Equal(all.OrderBy(p => p), pairs.OrderBy(p => p));
     }
@@ -188,12 +188,12 @@ public class ChangeStatusTests(TicketsApiFactory factory)
     public async Task Status_match_is_case_insensitive_and_response_is_canonical(
         string requested, string from, string expected)
     {
-        var id = await _client.CreateTicketInStatusAsync(from);
+        Guid id = await _client.CreateTicketInStatusAsync(from);
 
-        var response = await _client.PatchStatusAsync(id, new { status = requested });
+        HttpResponseMessage response = await _client.PatchStatusAsync(id, new { status = requested });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await ReadJsonAsync(response, TestContext.Current.CancellationToken);
+        JsonElement body = await ReadJsonAsync(response, TestContext.Current.CancellationToken);
         Assert.Equal(expected, body.GetProperty("status").GetString());
     }
 
@@ -221,11 +221,11 @@ public class ChangeStatusTests(TicketsApiFactory factory)
     [InlineData("""{ "status": "InProgress", "Status": "InProgress" }""")] // AC18 same key, other case
     public async Task Invalid_status_returns_400_naming_status_and_leaves_ticket_unchanged(string json)
     {
-        var ct = TestContext.Current.CancellationToken;
-        var id = await _client.CreateTicketInStatusAsync("Open");
-        var before = await (await _client.GetAsync($"/tickets/{id}", ct)).Content.ReadAsStringAsync(ct);
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        Guid id = await _client.CreateTicketInStatusAsync("Open");
+        string before = await (await _client.GetAsync($"/tickets/{id}", ct)).Content.ReadAsStringAsync(ct);
 
-        var response = await _client.PatchStatusRawAsync(id.ToString(), json);
+        HttpResponseMessage response = await _client.PatchStatusRawAsync(id.ToString(), json);
 
         await AssertValidationErrorAsync(response, "status");
         Assert.Equal(before, await (await _client.GetAsync($"/tickets/{id}", ct)).Content.ReadAsStringAsync(ct));
@@ -234,13 +234,13 @@ public class ChangeStatusTests(TicketsApiFactory factory)
     [Fact]
     public async Task Unknown_body_fields_are_ignored()
     {
-        var id = await _client.CreateTicketInStatusAsync("Open");
+        Guid id = await _client.CreateTicketInStatusAsync("Open");
 
-        var response = await _client.PatchStatusRawAsync(
+        HttpResponseMessage response = await _client.PatchStatusRawAsync(
             id.ToString(), """{ "status": "InProgress", "reason": "picked up", "priority": 1 }""");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await ReadJsonAsync(response, TestContext.Current.CancellationToken);
+        JsonElement body = await ReadJsonAsync(response, TestContext.Current.CancellationToken);
         Assert.Equal("InProgress", body.GetProperty("status").GetString());
     }
 
@@ -249,7 +249,7 @@ public class ChangeStatusTests(TicketsApiFactory factory)
     [Fact]
     public async Task Unknown_guid_returns_404_problem_details()
     {
-        var response = await _client.PatchStatusAsync(Guid.NewGuid(), new { status = "InProgress" });
+        HttpResponseMessage response = await _client.PatchStatusAsync(Guid.NewGuid(), new { status = "InProgress" });
 
         await AssertProblemDetailsAsync(response, HttpStatusCode.NotFound);
     }
@@ -260,7 +260,7 @@ public class ChangeStatusTests(TicketsApiFactory factory)
     [InlineData("00000000-0000-0000-0000-00000000000Z")]
     public async Task Non_guid_id_returns_404_problem_details(string id)
     {
-        var response = await _client.PatchStatusRawAsync(id, """{ "status": "InProgress" }""");
+        HttpResponseMessage response = await _client.PatchStatusRawAsync(id, """{ "status": "InProgress" }""");
 
         await AssertProblemDetailsAsync(response, HttpStatusCode.NotFound);
     }
@@ -268,7 +268,7 @@ public class ChangeStatusTests(TicketsApiFactory factory)
     [Fact]
     public async Task Unknown_id_with_invalid_body_returns_400_not_404()
     {
-        var response = await _client.PatchStatusRawAsync(Guid.NewGuid().ToString(), """{ "status": "Banana" }""");
+        HttpResponseMessage response = await _client.PatchStatusRawAsync(Guid.NewGuid().ToString(), """{ "status": "Banana" }""");
 
         await AssertValidationErrorAsync(response, "status");
     }
@@ -277,9 +277,9 @@ public class ChangeStatusTests(TicketsApiFactory factory)
     public async Task Body_is_validated_before_the_transition_check()
     {
         // A Closed ticket rejects every change with 409, but an invalid body must still get 400.
-        var id = await _client.CreateTicketInStatusAsync("Closed");
+        Guid id = await _client.CreateTicketInStatusAsync("Closed");
 
-        var response = await _client.PatchStatusRawAsync(id.ToString(), """{ "status": 1 }""");
+        HttpResponseMessage response = await _client.PatchStatusRawAsync(id.ToString(), """{ "status": 1 }""");
 
         await AssertValidationErrorAsync(response, "status");
     }

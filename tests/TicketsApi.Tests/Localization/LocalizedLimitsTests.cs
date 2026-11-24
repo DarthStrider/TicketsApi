@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using TicketsApi.Features.Tickets;
 using TicketsApi.Tests.Tickets;
 using static TicketsApi.Tests.Tickets.TicketTestHelpers;
@@ -33,19 +34,19 @@ public abstract class LocalizedLimitsTests<TFactory> : IClassFixture<TFactory>
     [InlineData("fr", true)]
     public async Task Title_413_is_localized(string language, bool patch)
     {
-        var tooLarge = "{\"title\":\"t\",\"pad\":\"" + new string('x', (int)TicketsEndpoints.MaxRequestBodyBytes) + "\"}";
-        var url = "/tickets";
+        string tooLarge = "{\"title\":\"t\",\"pad\":\"" + new string('x', (int)TicketsEndpoints.MaxRequestBodyBytes) + "\"}";
+        string url = "/tickets";
         if (patch)
         {
-            var created = await _client.PostAsJsonAsync("/tickets", new { title = "t" }, TestContext.Current.CancellationToken);
-            var id = (await ReadJsonAsync(created, TestContext.Current.CancellationToken)).GetProperty("id").GetGuid();
+            HttpResponseMessage created = await _client.PostAsJsonAsync("/tickets", new { title = "t" }, TestContext.Current.CancellationToken);
+            Guid id = (await ReadJsonAsync(created, TestContext.Current.CancellationToken)).GetProperty("id").GetGuid();
             url = $"/tickets/{id}/status";
         }
 
-        var response = await OverCapRequests.SendAsync(
+        HttpResponseMessage response = await OverCapRequests.SendAsync(
             _client, patch ? HttpMethod.Patch : HttpMethod.Post, url, tooLarge, Texts.Header(language));
 
-        var body = await AssertProblemDetailsAsync(response, HttpStatusCode.RequestEntityTooLarge);
+        JsonElement body = await AssertProblemDetailsAsync(response, HttpStatusCode.RequestEntityTooLarge);
         Assert.Equal(Texts.Get("Title413", language), body.GetProperty("title").GetString());
 
         // AC7: the PATCH 413 goes through the exception handler, which clears the response headers.
@@ -62,9 +63,9 @@ public abstract class LocalizedLimitsTests<TFactory> : IClassFixture<TFactory>
     [InlineData("fr", """{ "title": 5 }""")]
     public async Task Malformed_post_body_title_is_localized(string language, string json)
     {
-        var response = await _client.SendAsync(HttpMethod.Post, "/tickets", Texts.Header(language), json);
+        HttpResponseMessage response = await _client.SendAsync(HttpMethod.Post, "/tickets", Texts.Header(language), json);
 
-        var body = await AssertProblemDetailsAsync(response, HttpStatusCode.BadRequest);
+        JsonElement body = await AssertProblemDetailsAsync(response, HttpStatusCode.BadRequest);
         Assert.Equal(Texts.Get("Title400", language), body.GetProperty("title").GetString());
         Assert.Equal([language], response.Content.Headers.ContentLanguage);
         Assert.Contains("Accept-Language", response.Headers.Vary);
@@ -75,9 +76,9 @@ public abstract class LocalizedLimitsTests<TFactory> : IClassFixture<TFactory>
     [InlineData("fr")]
     public async Task Non_guid_404_title_is_localized(string language)
     {
-        var response = await _client.SendAsync(HttpMethod.Get, "/tickets/abc", Texts.Header(language));
+        HttpResponseMessage response = await _client.SendAsync(HttpMethod.Get, "/tickets/abc", Texts.Header(language));
 
-        var body = await AssertProblemDetailsAsync(response, HttpStatusCode.NotFound);
+        JsonElement body = await AssertProblemDetailsAsync(response, HttpStatusCode.NotFound);
         Assert.Equal(Texts.Get("Title404", language), body.GetProperty("title").GetString());
     }
 }

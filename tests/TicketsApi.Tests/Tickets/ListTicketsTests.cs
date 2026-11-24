@@ -16,19 +16,19 @@ public class ListTicketsTests(TicketsApiFactory factory)
     [Fact]
     public async Task List_returns_items_sorted_by_created_at_newest_first()
     {
-        var clock = new TestClock(T0);
-        using var app = factory.WithClock(clock);
-        var client = app.CreateClient();
+        TestClock clock = new(T0);
+        using WebApplicationFactory<Program> app = factory.WithClock(clock);
+        HttpClient client = app.CreateClient();
 
         // Created out of time order, so the id order (v7, creation order) differs from the createdAt order.
         clock.UtcNow = T0.AddMinutes(2);
-        var newest = await client.CreateTicketAsync("newest");
+        JsonElement newest = await client.CreateTicketAsync("newest");
         clock.UtcNow = T0;
-        var oldest = await client.CreateTicketAsync("oldest");
+        JsonElement oldest = await client.CreateTicketAsync("oldest");
         clock.UtcNow = T0.AddMinutes(1);
-        var middle = await client.CreateTicketAsync("middle");
+        JsonElement middle = await client.CreateTicketAsync("middle");
 
-        var ids = await GetItemIdsAsync(client, "/tickets");
+        List<Guid> ids = await GetItemIdsAsync(client, "/tickets");
 
         Assert.Equal([Id(newest), Id(middle), Id(oldest)], ids);
     }
@@ -36,22 +36,22 @@ public class ListTicketsTests(TicketsApiFactory factory)
     [Fact]
     public async Task List_body_is_an_object_with_only_items()
     {
-        var ct = TestContext.Current.CancellationToken;
-        using var app = factory.WithClock(new TestClock(T0));
-        var client = app.CreateClient();
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        using WebApplicationFactory<Program> app = factory.WithClock(new TestClock(T0));
+        HttpClient client = app.CreateClient();
         const string title = "Imprimante bloquée 🖨️";
         const string description = "Café renversé ☕";
-        var created = await client.CreateTicketAsync(title, description);
+        JsonElement created = await client.CreateTicketAsync(title, description);
 
-        var response = await client.GetAsync("/tickets", ct);
+        HttpResponseMessage response = await client.GetAsync("/tickets", ct);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await ReadJsonAsync(response, ct);
+        JsonElement body = await ReadJsonAsync(response, ct);
         Assert.Equal(JsonValueKind.Object, body.ValueKind);
         Assert.Equal(["items"], body.EnumerateObject().Select(p => p.Name));
 
         // Each item has the same shape as the POST 201 body.
-        var item = Assert.Single(body.GetProperty("items").EnumerateArray());
+        JsonElement item = Assert.Single(body.GetProperty("items").EnumerateArray());
         Assert.Equal(created.GetRawText(), item.GetRawText());
 
         // Guards against a vacuous match where both bodies lost the values.
@@ -62,15 +62,15 @@ public class ListTicketsTests(TicketsApiFactory factory)
     [Fact]
     public async Task Same_created_at_is_ordered_by_id_descending()
     {
-        using var app = factory.WithClock(new TestClock(T0));
-        var client = app.CreateClient();
-        var created = new List<Guid>();
-        for (var i = 0; i < 5; i++)
+        using WebApplicationFactory<Program> app = factory.WithClock(new TestClock(T0));
+        HttpClient client = app.CreateClient();
+        List<Guid> created = new();
+        for (int i = 0; i < 5; i++)
         {
             created.Add(Id(await client.CreateTicketAsync($"tie {i}")));
         }
 
-        var ids = await GetItemIdsAsync(client, "/tickets");
+        List<Guid> ids = await GetItemIdsAsync(client, "/tickets");
 
         Assert.Equal(created.OrderByDescending(id => id), ids);
     }
@@ -80,17 +80,17 @@ public class ListTicketsTests(TicketsApiFactory factory)
     public async Task List_returns_every_ticket_without_paging()
     {
         const int count = 101;
-        var clock = new TestClock(T0);
-        using var app = factory.WithClock(clock);
-        var client = app.CreateClient();
-        var created = new List<Guid>();
-        for (var i = 0; i < count; i++)
+        TestClock clock = new(T0);
+        using WebApplicationFactory<Program> app = factory.WithClock(clock);
+        HttpClient client = app.CreateClient();
+        List<Guid> created = new();
+        for (int i = 0; i < count; i++)
         {
             clock.UtcNow = T0.AddSeconds(i);
             created.Add(Id(await client.CreateTicketAsync($"ticket {i}")));
         }
 
-        var ids = await GetItemIdsAsync(client, "/tickets");
+        List<Guid> ids = await GetItemIdsAsync(client, "/tickets");
 
         Assert.Equal(count, ids.Count);
         Assert.Equal(Enumerable.Reverse(created), ids);
@@ -99,14 +99,14 @@ public class ListTicketsTests(TicketsApiFactory factory)
     [Fact]
     public async Task Empty_store_returns_200_with_empty_items()
     {
-        var ct = TestContext.Current.CancellationToken;
-        using var app = factory.WithClock(new TestClock(T0));
-        var client = app.CreateClient();
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        using WebApplicationFactory<Program> app = factory.WithClock(new TestClock(T0));
+        HttpClient client = app.CreateClient();
 
-        var response = await client.GetAsync("/tickets", ct);
+        HttpResponseMessage response = await client.GetAsync("/tickets", ct);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await ReadJsonAsync(response, ct);
+        JsonElement body = await ReadJsonAsync(response, ct);
         Assert.Equal(0, body.GetProperty("items").GetArrayLength());
     }
 
@@ -115,16 +115,16 @@ public class ListTicketsTests(TicketsApiFactory factory)
     [InlineData("/tickets?sort=asc&page=2&pageSize=1")]
     public async Task Unknown_query_parameter_is_ignored(string url)
     {
-        var ct = TestContext.Current.CancellationToken;
-        var clock = new TestClock(T0);
-        using var app = factory.WithClock(clock);
-        var client = app.CreateClient();
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        TestClock clock = new(T0);
+        using WebApplicationFactory<Program> app = factory.WithClock(clock);
+        HttpClient client = app.CreateClient();
         await client.CreateTicketAsync("a");
         clock.UtcNow = T0.AddMinutes(1);
         await client.CreateTicketAsync("b");
 
-        var expected = await (await client.GetAsync("/tickets", ct)).Content.ReadAsStringAsync(ct);
-        var response = await client.GetAsync(url, ct);
+        string expected = await (await client.GetAsync("/tickets", ct)).Content.ReadAsStringAsync(ct);
+        HttpResponseMessage response = await client.GetAsync(url, ct);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(expected, await response.Content.ReadAsStringAsync(ct));
@@ -140,18 +140,18 @@ public class ListTicketsTests(TicketsApiFactory factory)
     [InlineData("OPEN")]
     public async Task Status_filter_returns_matching_tickets_newest_first(string status)
     {
-        var clock = new TestClock(T0);
-        using var app = factory.WithClock(clock);
-        var client = app.CreateClient();
-        var older = await client.CreateTicketAsync("older");
+        TestClock clock = new(T0);
+        using WebApplicationFactory<Program> app = factory.WithClock(clock);
+        HttpClient client = app.CreateClient();
+        JsonElement older = await client.CreateTicketAsync("older");
         clock.UtcNow = T0.AddMinutes(1);
-        var newer = await client.CreateTicketAsync("newer");
+        JsonElement newer = await client.CreateTicketAsync("newer");
 
-        var ct = TestContext.Current.CancellationToken;
-        var response = await client.GetAsync($"/tickets?status={status}", ct);
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        HttpResponseMessage response = await client.GetAsync($"/tickets?status={status}", ct);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var items = (await ReadJsonAsync(response, ct)).GetProperty("items").EnumerateArray().ToList();
+        List<JsonElement> items = (await ReadJsonAsync(response, ct)).GetProperty("items").EnumerateArray().ToList();
         Assert.Equal([Id(newer), Id(older)], items.Select(Id));
 
         // AC11: the response always uses the canonical name, whatever case the request used.
@@ -169,24 +169,24 @@ public class ListTicketsTests(TicketsApiFactory factory)
     [InlineData("inprogress", "InProgress")]
     public async Task Status_filter_excludes_other_statuses(string query, string status)
     {
-        var clock = new TestClock(T0);
-        using var app = factory.WithClock(clock);
-        var client = app.CreateClient();
+        TestClock clock = new(T0);
+        using WebApplicationFactory<Program> app = factory.WithClock(clock);
+        HttpClient client = app.CreateClient();
 
         // Two tickets per status, created one minute apart, so the expected order is newest first.
-        var byStatus = new Dictionary<string, List<Guid>>();
-        var minute = 0;
-        foreach (var s in new[] { "Open", "InProgress", "Resolved", "InReview", "Closed" })
+        Dictionary<string, List<Guid>> byStatus = new();
+        int minute = 0;
+        foreach (string s in new[] { "Open", "InProgress", "Resolved", "InReview", "Closed" })
         {
             byStatus[s] = [];
-            for (var i = 0; i < 2; i++)
+            for (int i = 0; i < 2; i++)
             {
                 clock.UtcNow = T0.AddMinutes(minute++);
                 byStatus[s].Add(await client.CreateTicketInStatusAsync(s, $"{s} {i}"));
             }
         }
 
-        var ids = await GetItemIdsAsync(client, $"/tickets?status={query}");
+        List<Guid> ids = await GetItemIdsAsync(client, $"/tickets?status={query}");
 
         Assert.Equal(Enumerable.Reverse(byStatus[status]), ids);
     }
@@ -229,11 +229,11 @@ public class ListTicketsTests(TicketsApiFactory factory)
 
     private async Task AssertStatusRejectedAsync(string url)
     {
-        using var app = factory.WithClock(new TestClock(T0));
-        var client = app.CreateClient();
+        using WebApplicationFactory<Program> app = factory.WithClock(new TestClock(T0));
+        HttpClient client = app.CreateClient();
         await client.CreateTicketAsync("exists");
 
-        var response = await client.GetAsync(url, TestContext.Current.CancellationToken);
+        HttpResponseMessage response = await client.GetAsync(url, TestContext.Current.CancellationToken);
 
         await AssertValidationErrorAsync(response, "status");
     }
@@ -242,10 +242,10 @@ public class ListTicketsTests(TicketsApiFactory factory)
 
     private static async Task<List<Guid>> GetItemIdsAsync(HttpClient client, string url)
     {
-        var ct = TestContext.Current.CancellationToken;
-        var response = await client.GetAsync(url, ct);
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        HttpResponseMessage response = await client.GetAsync(url, ct);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await ReadJsonAsync(response, ct);
+        JsonElement body = await ReadJsonAsync(response, ct);
         return body.GetProperty("items").EnumerateArray().Select(Id).ToList();
     }
 }

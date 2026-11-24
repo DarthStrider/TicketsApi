@@ -5,16 +5,16 @@ public class KestrelFactoryTests
     [Fact]
     public async Task Binds_a_dynamic_port_so_instances_can_run_in_parallel()
     {
-        var ct = TestContext.Current.CancellationToken;
-        await using var first = new KestrelFactory();
-        await using var second = new KestrelFactory();
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        await using KestrelFactory first = new();
+        await using KestrelFactory second = new();
         first.StartServer();
         second.StartServer();
 
-        using var firstClient = first.CreateClient();
-        using var secondClient = second.CreateClient();
-        var firstPort = firstClient.BaseAddress!.Port;
-        var secondPort = secondClient.BaseAddress!.Port;
+        using HttpClient firstClient = first.CreateClient();
+        using HttpClient secondClient = second.CreateClient();
+        int firstPort = firstClient.BaseAddress!.Port;
+        int secondPort = secondClient.BaseAddress!.Port;
 
         Assert.NotEqual(0, firstPort);
         Assert.NotEqual(firstPort, secondPort);

@@ -37,7 +37,7 @@ public static class LocalizationSetup
         // (validation, TypedResults.Problem, status-code pages, the exception handler) (criteria 9 and 10).
         services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
         {
-            var status = context.ProblemDetails.Status ?? context.HttpContext.Response.StatusCode;
+            int status = context.ProblemDetails.Status ?? context.HttpContext.Response.StatusCode;
             string? key = status switch
             {
                 StatusCodes.Status400BadRequest => context.ProblemDetails is HttpValidationProblemDetails
@@ -56,7 +56,7 @@ public static class LocalizationSetup
             // sets it, and the exception handler never puts exception details in it.
             if (key is not null)
             {
-                var localizer = context.HttpContext.RequestServices.GetRequiredService<IStringLocalizer<Messages>>();
+                IStringLocalizer<Messages> localizer = context.HttpContext.RequestServices.GetRequiredService<IStringLocalizer<Messages>>();
                 context.ProblemDetails.Title = localizer[key];
             }
         });
@@ -74,7 +74,7 @@ public static class LocalizationSetup
         // survive the exception handler, which clears the headers before writing its ProblemDetails.
         app.Use((context, next) =>
         {
-            var language = CultureInfo.CurrentUICulture.Name;
+            string language = CultureInfo.CurrentUICulture.Name;
             context.Response.OnStarting(() =>
             {
                 context.Response.Headers.ContentLanguage = language;

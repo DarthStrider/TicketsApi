@@ -40,8 +40,8 @@ public class TicketsApiFactory : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        var path = _fixedDatabasePath ?? NewDatabasePath();
-        var settings = new Dictionary<string, string?> { ["ConnectionStrings:Tickets"] = $"Data Source={path}" };
+        string path = _fixedDatabasePath ?? NewDatabasePath();
+        Dictionary<string, string?> settings = new() { ["ConnectionStrings:Tickets"] = $"Data Source={path}" };
         if (_fixedDatabasePath is null)
         {
             // A fallback for a host that never finished starting: deleted when this factory is disposed.
@@ -55,7 +55,7 @@ public class TicketsApiFactory : WebApplicationFactory<Program>
         // including Production, where the API itself refuses to start with pending migrations (criteria 15, 20).
         if (ApplyMigrations)
         {
-            using var db = new TicketsDbContext(
+            using TicketsDbContext db = new(
                 new DbContextOptionsBuilder<TicketsDbContext>().UseSqlite(settings["ConnectionStrings:Tickets"]).Options);
             db.Database.Migrate();
         }
@@ -67,8 +67,8 @@ public class TicketsApiFactory : WebApplicationFactory<Program>
     // factory that owns it disposes it, synchronously, before that factory's Dispose returns.
     protected override IHost CreateHost(IHostBuilder builder)
     {
-        var host = base.CreateHost(builder);
-        var owned = host.Services.GetRequiredService<IConfiguration>()[OwnedDatabaseKey];
+        IHost host = base.CreateHost(builder);
+        string? owned = host.Services.GetRequiredService<IConfiguration>()[OwnedDatabaseKey];
         return owned is null ? host : new DatabaseOwningHost(host, owned);
     }
 
@@ -77,7 +77,7 @@ public class TicketsApiFactory : WebApplicationFactory<Program>
         base.Dispose(disposing);
         if (disposing)
         {
-            foreach (var path in _databases)
+            foreach (string path in _databases)
             {
                 TestDatabase.Delete(path);
             }
@@ -131,7 +131,7 @@ internal static class TestDatabase
     public static void Delete(string path)
     {
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-        foreach (var file in new[] { path, path + "-wal", path + "-shm" })
+        foreach (string file in new[] { path, path + "-wal", path + "-shm" })
         {
             try
             {

@@ -35,10 +35,10 @@ public class LocalizedMessagesTests(TicketsApiFactory factory)
     [MemberData(nameof(FieldCases))]
     public async Task Field_message_text_is_exact(string key, string language)
     {
-        var id = await _client.CreateTicketInStatusAsync("Open");
-        var header = Texts.Header(language);
+        Guid id = await _client.CreateTicketInStatusAsync("Open");
+        string? header = Texts.Header(language);
 
-        var (response, field) = key switch
+        (HttpResponseMessage response, string field) = key switch
         {
             "TitleRequired" => (await PostAsync(header, """{ "title": "" }"""), "title"),
             "TitleTooLong" => (await PostAsync(header, $$"""{ "title": "{{new string('a', 201)}}" }"""), "title"),
@@ -61,7 +61,7 @@ public class LocalizedMessagesTests(TicketsApiFactory factory)
     [InlineData("fr")]
     public async Task List_filter_message_is_localized(string language)
     {
-        var response = await _client.SendAsync(HttpMethod.Get, "/tickets?status=Banana", Texts.Header(language));
+        HttpResponseMessage response = await _client.SendAsync(HttpMethod.Get, "/tickets?status=Banana", Texts.Header(language));
 
         await AssertFieldMessageAsync(response, "status", Texts.Get("StatusMustBeOneOf", language), language);
     }
@@ -71,9 +71,9 @@ public class LocalizedMessagesTests(TicketsApiFactory factory)
     [InlineData("fr")]
     public async Task Unparsable_patch_body_message_is_localized(string language)
     {
-        var id = await _client.CreateTicketInStatusAsync("Open");
+        Guid id = await _client.CreateTicketInStatusAsync("Open");
 
-        var response = await PatchAsync(id, Texts.Header(language), "{");
+        HttpResponseMessage response = await PatchAsync(id, Texts.Header(language), "{");
 
         await AssertFieldMessageAsync(response, "body", Texts.Get("BodyInvalid", language), language);
     }
@@ -83,9 +83,9 @@ public class LocalizedMessagesTests(TicketsApiFactory factory)
     [InlineData("fr")]
     public async Task Null_status_message_is_localized(string language)
     {
-        var id = await _client.CreateTicketInStatusAsync("Open");
+        Guid id = await _client.CreateTicketInStatusAsync("Open");
 
-        var response = await PatchAsync(id, Texts.Header(language), """{ "status": null }""");
+        HttpResponseMessage response = await PatchAsync(id, Texts.Header(language), """{ "status": null }""");
 
         await AssertFieldMessageAsync(response, "status", Texts.Get("StatusRequired", language), language);
     }
@@ -108,10 +108,10 @@ public class LocalizedMessagesTests(TicketsApiFactory factory)
     [MemberData(nameof(TitleCases))]
     public async Task Problem_title_text_is_exact(string scenario, string language)
     {
-        var id = await _client.CreateTicketInStatusAsync("Open");
-        var header = Texts.Header(language);
+        Guid id = await _client.CreateTicketInStatusAsync("Open");
+        string? header = Texts.Header(language);
 
-        var (response, status, key) = scenario switch
+        (HttpResponseMessage response, HttpStatusCode status, string key) = scenario switch
         {
             // Malformed JSON on POST is rejected by the framework (no errors), not by our validation.
             "Title400" => (await PostAsync(header, "{"), HttpStatusCode.BadRequest, "Title400"),
@@ -142,7 +142,7 @@ public class LocalizedMessagesTests(TicketsApiFactory factory)
             _ => throw new ArgumentOutOfRangeException(nameof(scenario)),
         };
 
-        var body = await AssertProblemDetailsAsync(response, status);
+        JsonElement body = await AssertProblemDetailsAsync(response, status);
         Assert.Equal(Texts.Get(key, language), body.GetProperty("title").GetString());
 
         // AC7 on every error path. In Development the framework's 400s go through the exception handler,
@@ -160,7 +160,7 @@ public class LocalizedMessagesTests(TicketsApiFactory factory)
     [InlineData("fr", "Production")]
     public async Task Title_500_is_localized(string language, string environment)
     {
-        using var app = factory.WithWebHostBuilder(builder =>
+        using WebApplicationFactory<Program> app = factory.WithWebHostBuilder(builder =>
         {
             builder.UseEnvironment(environment);
             builder.ConfigureTestServices(services =>
@@ -169,11 +169,11 @@ public class LocalizedMessagesTests(TicketsApiFactory factory)
                 services.AddSingleton<ITicketStore, ThrowingTicketStore>();
             });
         });
-        var client = app.CreateClient();
+        HttpClient client = app.CreateClient();
 
-        var response = await client.SendAsync(HttpMethod.Get, $"/tickets/{Guid.NewGuid()}", Texts.Header(language));
+        HttpResponseMessage response = await client.SendAsync(HttpMethod.Get, $"/tickets/{Guid.NewGuid()}", Texts.Header(language));
 
-        var body = await AssertProblemDetailsAsync(response, HttpStatusCode.InternalServerError);
+        JsonElement body = await AssertProblemDetailsAsync(response, HttpStatusCode.InternalServerError);
         Assert.Equal(Texts.Get("Title500", language), body.GetProperty("title").GetString());
         Assert.Equal([language], response.Content.Headers.ContentLanguage);
         Assert.Contains("Accept-Language", response.Headers.Vary);
@@ -185,12 +185,12 @@ public class LocalizedMessagesTests(TicketsApiFactory factory)
     [Fact]
     public async Task Only_text_changes_between_languages_for_validation_errors()
     {
-        var json = $$"""{ "title": "", "description": "{{new string('d', 4001)}}" }""";
+        string json = $$"""{ "title": "", "description": "{{new string('d', 4001)}}" }""";
 
-        var enResponse = await PostAsync(null, json);
-        var frResponse = await PostAsync("fr", json);
-        var en = await ReadJsonAsync(enResponse, TestContext.Current.CancellationToken);
-        var fr = await ReadJsonAsync(frResponse, TestContext.Current.CancellationToken);
+        HttpResponseMessage enResponse = await PostAsync(null, json);
+        HttpResponseMessage frResponse = await PostAsync("fr", json);
+        JsonElement en = await ReadJsonAsync(enResponse, TestContext.Current.CancellationToken);
+        JsonElement fr = await ReadJsonAsync(frResponse, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, enResponse.StatusCode);
         Assert.Equal(enResponse.StatusCode, frResponse.StatusCode);
@@ -204,11 +204,11 @@ public class LocalizedMessagesTests(TicketsApiFactory factory)
     [Fact]
     public async Task Only_text_changes_between_languages_for_conflicts()
     {
-        var ct = TestContext.Current.CancellationToken;
-        var id = await _client.CreateTicketInStatusAsync("Open");
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        Guid id = await _client.CreateTicketInStatusAsync("Open");
 
-        var en = await ReadJsonAsync(await PatchAsync(id, null, """{ "status": "Resolved" }"""), ct);
-        var fr = await ReadJsonAsync(await PatchAsync(id, "fr", """{ "status": "resolved" }"""), ct);
+        JsonElement en = await ReadJsonAsync(await PatchAsync(id, null, """{ "status": "Resolved" }"""), ct);
+        JsonElement fr = await ReadJsonAsync(await PatchAsync(id, "fr", """{ "status": "resolved" }"""), ct);
 
         Assert.Equal(en.GetProperty("status").GetInt32(), fr.GetProperty("status").GetInt32());
         Assert.Equal(en.GetProperty("type").GetString(), fr.GetProperty("type").GetString());
@@ -223,21 +223,21 @@ public class LocalizedMessagesTests(TicketsApiFactory factory)
     [Fact]
     public async Task Successful_responses_are_identical_in_both_languages()
     {
-        var ct = TestContext.Current.CancellationToken;
-        using var app = factory.WithClock(new TestClock(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)));
-        var client = app.CreateClient();
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        using WebApplicationFactory<Program> app = factory.WithClock(new TestClock(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero)));
+        HttpClient client = app.CreateClient();
 
-        var created = await client.SendAsync(HttpMethod.Post, "/tickets", "fr", """{ "title": "Café", "description": "é" }""");
+        HttpResponseMessage created = await client.SendAsync(HttpMethod.Post, "/tickets", "fr", """{ "title": "Café", "description": "é" }""");
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
-        var body = await ReadJsonAsync(created, ct);
-        var id = body.GetProperty("id").GetGuid();
+        JsonElement body = await ReadJsonAsync(created, ct);
+        Guid id = body.GetProperty("id").GetGuid();
         Assert.Equal("Open", body.GetProperty("status").GetString());
         Assert.Equal("2026-01-01T12:00:00+00:00", body.GetProperty("createdAt").GetString());
 
-        foreach (var url in new[] { $"/tickets/{id}", "/tickets", "/tickets?status=Open" })
+        foreach (string url in new[] { $"/tickets/{id}", "/tickets", "/tickets?status=Open" })
         {
-            var en = await (await client.SendAsync(HttpMethod.Get, url)).Content.ReadAsStringAsync(ct);
-            var fr = await (await client.SendAsync(HttpMethod.Get, url, "fr")).Content.ReadAsStringAsync(ct);
+            string en = await (await client.SendAsync(HttpMethod.Get, url)).Content.ReadAsStringAsync(ct);
+            string fr = await (await client.SendAsync(HttpMethod.Get, url, "fr")).Content.ReadAsStringAsync(ct);
             Assert.Equal(en, fr);
         }
     }
@@ -248,11 +248,11 @@ public class LocalizedMessagesTests(TicketsApiFactory factory)
     [InlineData("InProgress")]
     public async Task French_header_does_not_change_status_matching(string requested)
     {
-        var ct = TestContext.Current.CancellationToken;
-        var id = await _client.CreateTicketInStatusAsync("Open");
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        Guid id = await _client.CreateTicketInStatusAsync("Open");
 
-        var patch = await PatchAsync(id, "fr", $$"""{ "status": "{{requested}}" }""");
-        var list = await _client.SendAsync(HttpMethod.Get, $"/tickets?status={requested}", "fr");
+        HttpResponseMessage patch = await PatchAsync(id, "fr", $$"""{ "status": "{{requested}}" }""");
+        HttpResponseMessage list = await _client.SendAsync(HttpMethod.Get, $"/tickets?status={requested}", "fr");
 
         Assert.Equal(HttpStatusCode.OK, patch.StatusCode);
         Assert.Equal("InProgress", (await ReadJsonAsync(patch, ct)).GetProperty("status").GetString());
@@ -270,8 +270,8 @@ public class LocalizedMessagesTests(TicketsApiFactory factory)
     private static async Task AssertFieldMessageAsync(
         HttpResponseMessage response, string field, string expected, string language)
     {
-        var body = await AssertProblemDetailsAsync(response, HttpStatusCode.BadRequest);
-        var messages = body.GetProperty("errors").GetProperty(field).EnumerateArray().Select(m => m.GetString());
+        JsonElement body = await AssertProblemDetailsAsync(response, HttpStatusCode.BadRequest);
+        IEnumerable<string?> messages = body.GetProperty("errors").GetProperty(field).EnumerateArray().Select(m => m.GetString());
         Assert.Equal([expected], messages);
         Assert.Equal(Texts.Get("Title400Validation", language), body.GetProperty("title").GetString());
     }

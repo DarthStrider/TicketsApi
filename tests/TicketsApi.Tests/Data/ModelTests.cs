@@ -13,11 +13,11 @@ public class ModelTests(TicketsApiFactory factory) : IClassFixture<TicketsApiFac
     [Fact]
     public void Store_is_ef_core_on_a_sqlite_file()
     {
-        using var scope = factory.Services.CreateScope();
+        using IServiceScope scope = factory.Services.CreateScope();
 
-        var store = scope.ServiceProvider.GetRequiredService<ITicketStore>();
-        var db = scope.ServiceProvider.GetRequiredService<TicketsDbContext>();
-        var dataSource = new SqliteConnectionStringBuilder(db.Database.GetConnectionString()).DataSource;
+        ITicketStore store = scope.ServiceProvider.GetRequiredService<ITicketStore>();
+        TicketsDbContext db = scope.ServiceProvider.GetRequiredService<TicketsDbContext>();
+        string dataSource = new SqliteConnectionStringBuilder(db.Database.GetConnectionString()).DataSource;
 
         Assert.IsType<EfTicketStore>(store);
         Assert.Equal("Microsoft.EntityFrameworkCore.Sqlite", db.Database.ProviderName);
@@ -29,7 +29,7 @@ public class ModelTests(TicketsApiFactory factory) : IClassFixture<TicketsApiFac
     [Fact]
     public void Model_has_no_pending_changes()
     {
-        using var db = new DesignTimeTicketsDbContextFactory().CreateDbContext([]);
+        using TicketsDbContext db = new DesignTimeTicketsDbContextFactory().CreateDbContext([]);
 
         Assert.NotEmpty(db.Database.GetMigrations());
         Assert.False(db.Database.HasPendingModelChanges(), "The model changed without a migration: run `dotnet ef migrations add`.");

@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 
 namespace TicketsApi.Data;
 
@@ -27,11 +28,11 @@ internal static class TicketsDatabase
     // refuses to start with pending migrations, because they are applied before deploy (criterion 20).
     public static async Task InitializeTicketsDatabaseAsync(this WebApplication app)
     {
-        var connectionString = app.Services.GetRequiredService<TicketsConnectionString>().Value;
+        string connectionString = app.Services.GetRequiredService<TicketsConnectionString>().Value;
         CreateDatabaseFolder(connectionString);
 
-        await using var scope = app.Services.CreateAsyncScope();
-        var database = scope.ServiceProvider.GetRequiredService<TicketsDbContext>().Database;
+        await using AsyncServiceScope scope = app.Services.CreateAsyncScope();
+        DatabaseFacade database = scope.ServiceProvider.GetRequiredService<TicketsDbContext>().Database;
 
         if (app.Environment.IsDevelopment())
         {
@@ -39,7 +40,7 @@ internal static class TicketsDatabase
             return;
         }
 
-        var pending = (await database.GetPendingMigrationsAsync()).ToList();
+        List<string> pending = (await database.GetPendingMigrationsAsync()).ToList();
         if (pending.Count > 0)
         {
             throw new InvalidOperationException(
@@ -52,7 +53,7 @@ internal static class TicketsDatabase
     // `App_Data/tickets.dev.db` works however the API is started. No side effects: see CreateDatabaseFolder.
     public static string GetConnectionString(IConfiguration configuration, IHostEnvironment environment)
     {
-        var value = configuration.GetConnectionString("Tickets");
+        string? value = configuration.GetConnectionString("Tickets");
         if (string.IsNullOrWhiteSpace(value))
         {
             throw new InvalidOperationException(
@@ -60,7 +61,7 @@ internal static class TicketsDatabase
                 "for example with the environment variable ConnectionStrings__Tickets.");
         }
 
-        var builder = new SqliteConnectionStringBuilder(value);
+        SqliteConnectionStringBuilder builder = new(value);
         if (IsFile(builder) && !Path.IsPathFullyQualified(builder.DataSource))
         {
             builder.DataSource = Path.Combine(environment.ContentRootPath, builder.DataSource);
@@ -72,8 +73,8 @@ internal static class TicketsDatabase
     // SQLite creates the file but not its folder. Internal so the tests can check it (criterion 11).
     internal static void CreateDatabaseFolder(string connectionString)
     {
-        var builder = new SqliteConnectionStringBuilder(connectionString);
-        var folder = IsFile(builder) ? Path.GetDirectoryName(builder.DataSource) : null;
+        SqliteConnectionStringBuilder builder = new(connectionString);
+        string? folder = IsFile(builder) ? Path.GetDirectoryName(builder.DataSource) : null;
         if (!string.IsNullOrEmpty(folder))
         {
             Directory.CreateDirectory(folder);

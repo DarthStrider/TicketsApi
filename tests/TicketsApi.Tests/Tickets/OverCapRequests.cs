@@ -24,7 +24,7 @@ internal static class OverCapRequests
     public static Task<HttpResponseMessage> SendAsync(
         HttpClient server, HttpMethod method, string url, string json, string? acceptLanguage = null)
     {
-        var request = new HttpRequestMessage(method, new Uri(server.BaseAddress!, url))
+        HttpRequestMessage request = new(method, new Uri(server.BaseAddress!, url))
         {
             Content = new StringContent(json, Encoding.UTF8), // Content-Length is set, as for any request
         };

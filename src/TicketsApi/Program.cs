@@ -2,7 +2,7 @@ using TicketsApi.Data;
 using TicketsApi.Features.Tickets;
 using TicketsApi.Localization;
 
-var builder = WebApplication.CreateBuilder(args);
+WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
 builder.Services.AddTicketsLocalization(); // includes AddProblemDetails with localized titles
@@ -12,7 +12,7 @@ builder.Services.AddSingleton<TicketStoreTestHooks>();
 builder.Services.AddTicketsDatabase(); // SQLite through EF Core, from ConnectionStrings:Tickets (T-005)
 builder.Services.AddScoped<ITicketStore, EfTicketStore>();
 
-var app = builder.Build();
+WebApplication app = builder.Build();
 
 // Fails fast without a connection string; migrates in Development, refuses pending migrations elsewhere.
 await app.InitializeTicketsDatabaseAsync();
