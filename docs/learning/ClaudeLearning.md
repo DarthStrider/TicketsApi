@@ -453,7 +453,7 @@ public TicketsDbContext CreateDbContext(string[] args) =>
 
 ```
 var derived = factory.WithWebHostBuilder(_ => { });
-derived.UseKestrel(0); // not inherited from KestrelFactory
+derived.UseKestrel(); // not inherited; no port (UseKestrel(0) races the app's start, see lesson 48)
 
 // TestDatabaseCleanupTests.CreateKestrelClient
 static HttpClient CreateKestrelClient(WebApplicationFactory<Program> app)
@@ -463,6 +463,8 @@ static HttpClient CreateKestrelClient(WebApplicationFactory<Program> app)
     return app.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri(Assert.Single(address ?? [])) });
 }
 ```
+
+> Correction: this recipe originally used `derived.UseKestrel(0)`. It was changed to `derived.UseKestrel()` after the start race described in lesson 48.
 
 - In `tests/TicketsApi.Tests/Data/TestDatabaseCleanupTests.cs`, `AssertRunsOnKestrel` then checks that the `IServer` is not `TestServer`, that its type name starts with "Kestrel", and that the server listens on the client's port. `AssertStoredInAsync` checks that the ticket landed in that host's own database file.
 
