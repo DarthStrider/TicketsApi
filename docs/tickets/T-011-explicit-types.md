@@ -8,11 +8,11 @@ This is a pure refactor. Clients see no change, and no behaviour changes.
 
 ### Conversion
 1. Given any `.cs` file under `src/` or `tests/` (except the generated migrations in criterion 3), when I search it for `var` declarations, then each one has been replaced with its explicit type, or with target-typed `new()` when the type is already written on the left (`List<Ticket> tickets = new();`, `JsonSerializerOptions options = new() { ... };`).
-   - This covers every form of `var`: local declarations, `using var`, `foreach (var ...)`, `out var ...` and deconstruction (`var (a, b) = ...` becomes `(int a, string b) = ...` or `(int a, string b)` declared explicitly).
+   - This covers every form of `var`: local declarations, `using var` declarations, `using (var x = ...)` and `await using (var x = ...)` statements, `for (var i = ...)`, `foreach (var x in ...)`, `foreach (var (a, b) in ...)`, `out var ...` and deconstruction (`var (a, b) = ...` becomes `(int a, string b) = ...`, including in `foreach`).
    - **The only exception** is a variable of an anonymous type (`var payload = new { title = "t" };`, or a LINQ projection to an anonymous type). It stays `var`, because the type has no name.
    - Nullable annotations are kept exact: a `var` that held a `Ticket?` becomes `Ticket?`, not `Ticket` with a `!`.
 2. Given any `.cs` file under `src/` or `tests/` (except the generated migrations in criterion 3), after the `var` conversion, when an object creation repeats a type that is already apparent, then it is written as target-typed `new(...)`: `Type x = new Type(...);` becomes `Type x = new(...);`, and `Type x = new Type { ... };` becomes `Type x = new() { ... };`.
-   - "Apparent" means what IDE0090 (`csharp_style_implicit_object_creation_when_type_is_apparent`) reports, and the build (criterion 6) is the judge. In practice this is the `new` expression that initializes a declaration whose explicit type is written on the left: a local variable (including `using` declarations), a field, or a property initializer (`public List<Ticket> Items { get; } = new List<Ticket>();`).
+   - "Apparent" means what IDE0090 (`csharp_style_implicit_object_creation_when_type_is_apparent`) reports, and the build (criteria 4 and 5) is the judge. In practice this is the `new` expression that initializes a declaration whose explicit type is written on the left: a local variable (including `using` declarations), a field, or a property initializer (`public List<Ticket> Items { get; } = new List<Ticket>();`).
    - The created type must be exactly the declared type. `IList<int> xs = new List<int>();` and `object o = new Ticket(...);` stay as they are, because `new()` would create a different type.
    - Other places are not converted by this ticket, because IDE0090 does not treat the type as apparent there: method arguments, `return new Type(...)`, assignments to an existing variable, and arrays (`new int[]`, collection expressions).
 3. The generated EF Core migration files in `src/TicketsApi/Data/Migrations/` are not changed by this ticket, and they are excluded from the enforcement in criteria 4 to 6 (both the `var` rule and the `new()` rule).
@@ -30,10 +30,13 @@ This is a pure refactor. Clients see no change, and no behaviour changes.
 5. `Directory.Build.props` sets `<EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>`, so the code-style rules run during `dotnet build`. It is set only there, not in any `.csproj`.
    - `Directory.Build.props` already sets `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>`. That means the IDE0008 and IDE0090 warnings become **errors**: a stray `var` with a named type, or a `new Type(...)` that repeats an apparent type, fails `dotnet build`, locally, in the commit hook and in CI.
 6. Given the finished change, the developer temporarily adds test lines and shows the build output in the PR description. None of these lines is committed.
-   - Given `var count = 0;` added to a file in `src/` and to a file in `tests/`, when `dotnet build` runs, then it fails with IDE0008 naming each file and line.
+   - The test lines use values that are not constants, so the compiler's unused-variable warning (CS0219) never fires and the only diagnostics come from the rules under test.
+   - Given `var now = DateTime.UtcNow;` (a named type) added to a file in `src/` and to a file in `tests/`, when `dotnet build` runs, then it fails with IDE0008 naming each file and line.
+   - Given `var count = Environment.ProcessorCount;` (a built-in type, `int`) added to a file in `src/` and to a file in `tests/`, when `dotnet build` runs, then it fails with IDE0008 naming each file and line.
    - Given `List<int> xs = new List<int>();` added to a file in `src/` and to a file in `tests/`, when `dotnet build` runs, then it fails with IDE0090 naming each file and line.
-   - Given both lines added to a file in `src/TicketsApi/Data/Migrations/`, when `dotnet build` runs, then the build does not fail.
-   - Given `var payload = new { title = "t" };`, when `dotnet build` runs, then the build does not fail.
+   - For each of the three cases above, the build output shows only the expected IDE diagnostic (IDE0008 or IDE0090) and no other diagnostic.
+   - Given all three lines added to a file in `src/TicketsApi/Data/Migrations/`, when `dotnet build` runs, then the build does not fail.
+   - Given `var payload = new { title = "t" };` added to a file in `src/` and to a file in `tests/`, when `dotnet build` runs, then the build does not fail.
 
 ### Documentation
 7. `docs/design-principles.md` section 2 is updated in the same PR. Its last bullet ("This applies to new and changed lines. Converting the existing `var`s is a separate chore, not part of a ticket.") is replaced with a bullet saying that the build enforces explicit types (IDE0008) and target-typed `new()` (IDE0090) for all code except the generated migrations, since T-011. No other line in that file changes.
@@ -41,9 +44,11 @@ This is a pure refactor. Clients see no change, and no behaviour changes.
 ### Pure refactor
 8. No behaviour changes. The only changes are:
    - `var` and `new Type(...)` replaced in `.cs` files under `src/` and `tests/` (criteria 1 and 2);
+   - `using` directives that an explicit type name needs (for example `using Microsoft.EntityFrameworkCore.Infrastructure;` for `DatabaseFacade`), in the files being converted. Fully qualified type names inline are not used;
    - the new `.editorconfig`;
    - the one property in `Directory.Build.props`;
-   - the bullet in `docs/design-principles.md` section 2 (criterion 7).
+   - the bullet in `docs/design-principles.md` section 2 (criterion 7);
+   - `docs/tickets/T-011-explicit-types.md` (this ticket).
 
    No other code, configuration, package, documentation or migration file changes.
 9. No test is deleted, skipped or weakened, and no assertion changes. Given the test count from `dotnet test` on `main` before the change, when `dotnet test` runs after the change, then the same number of tests run and all of them pass. Both counts are shown in the PR description.
