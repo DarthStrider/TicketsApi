@@ -81,7 +81,9 @@ public class TestDatabaseCleanupTests
                 {
                     // A factory derived with WithWebHostBuilder does not inherit UseKestrel, and its CreateClient()
                     // points at the root's port (Mvc.Testing 10.0.15), so both are set here and then checked.
-                    derived.UseKestrel(0);
+                    // UseKestrel() without a port: the derived host still gets KestrelFactory's dynamic-port URL,
+                    // because ConfigureWebHost runs again, and UseKestrel(port) races the app's start (KestrelFactory).
+                    derived.UseKestrel();
                     client = CreateKestrelClient(derived);
                     AssertRunsOnKestrel(derived, client);
                 }
@@ -134,34 +136,41 @@ public class TestDatabaseCleanupTests
     public async Task Kestrel_factory_deletes_its_databases_when_disposed(bool disposeAsync)
     {
         var factory = new KestrelFactory();
-        var derived = factory.WithWebHostBuilder(_ => { });
-        derived.UseKestrel(0); // not inherited from KestrelFactory, see Derived_host_deletes_its_database_...
-
-        var files = new List<string>();
-        foreach (var (app, title) in new[] { (factory, "in the root"), (derived, "in the derived host") })
+        try
         {
-            var client = app == factory ? factory.CreateClient() : CreateKestrelClient(app);
-            AssertRunsOnKestrel(app, client);
-            await client.CreateTicketAsync(title);
-            await AssertStoredInAsync(app, title);
-            var path = DatabasePath(app);
-            Assert.StartsWith(Path.GetTempPath(), path);
-            Assert.True(File.Exists(path), $"Expected the host's database at {path}.");
-            files.AddRange([path, path + "-wal", path + "-shm"]);
+            var derived = factory.WithWebHostBuilder(_ => { });
+            derived.UseKestrel(); // not inherited, no port: see Derived_host_deletes_its_database_... and KestrelFactory
+
+            var files = new List<string>();
+            foreach (var (app, title) in new[] { (factory, "in the root"), (derived, "in the derived host") })
+            {
+                var client = app == factory ? factory.CreateClient() : CreateKestrelClient(app);
+                AssertRunsOnKestrel(app, client);
+                await client.CreateTicketAsync(title);
+                await AssertStoredInAsync(app, title);
+                var path = DatabasePath(app);
+                Assert.StartsWith(Path.GetTempPath(), path);
+                Assert.True(File.Exists(path), $"Expected the host's database at {path}.");
+                files.AddRange([path, path + "-wal", path + "-shm"]);
+            }
+
+            Assert.NotEqual(files[0], files[3]); // the derived host has its own file
+
+            if (disposeAsync)
+            {
+                await factory.DisposeAsync(); // what xUnit does with a class fixture; it disposes the derived host too
+            }
+            else
+            {
+                factory.Dispose();
+            }
+
+            Assert.All(files, file => Assert.False(File.Exists(file), $"{file} was not deleted."));
         }
-
-        Assert.NotEqual(files[0], files[3]); // the derived host has its own file
-
-        if (disposeAsync)
+        finally
         {
-            await factory.DisposeAsync(); // what xUnit does with a class fixture; it disposes the derived host too
+            await factory.DisposeAsync(); // a no-op after the dispose above; cleans up if something threw before it
         }
-        else
-        {
-            factory.Dispose();
-        }
-
-        Assert.All(files, file => Assert.False(File.Exists(file), $"{file} was not deleted."));
     }
 
     // WebApplicationFactory disposes its host with the synchronous Dispose, even from DisposeAsync, so the host

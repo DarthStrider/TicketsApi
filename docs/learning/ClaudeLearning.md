@@ -475,3 +475,35 @@ static HttpClient CreateKestrelClient(WebApplicationFactory<Program> app)
 - **Why:** the agent's count didn't cover its own experiments. Mutant runs that turn off cleanup leave debris by design, and nobody had made the experiments clean up after themselves.
 - **Know this:** a verification an agent reports is itself a claim, and needs the same treatment as a review finding (lesson 42). Be extra careful after an agent has run destructive or mutating experiments, which can leave state behind just like a stale build can (lesson 44). Give experiments their own cleanup, and when you count, separate "left by the real code" from "left by the experiment" (here the timestamps did that).
 - **Interview line:** "When an agent says 'verified, nothing left over', I re-run the check myself. Here its 0 was really 32, all from its own experiments; a clean before/after run showed the product code was fine."
+
+### 48. A CI failure that only happened once: the Kestrel start race (PR #7)
+
+- **What happened:** CI on main failed once after PR #5 merged (run 45254524742, attempt 1). The PR's own run had passed on the same code, and attempt 2 was green. The error was `IServerAddressesFeature.Addresses cannot be modified after the server has started`, thrown from `WebApplicationFactory`'s `TryConfigureServerPort` inside `StartServer()`.
+- **Why:** reading the release/10.0 source showed the call order. `UseKestrel(0)` sets a port, so `CreateHost` runs `Build()`, then `Addresses.Clear()` and `Add`, then `Start()`. With a top-level `Program.cs`, the app's own `app.Run()` starts Kestrel on the entry-point thread. When that thread wins, `Clear()` throws because the server has already started. The call order is confirmed from the source; the threading part was inferred and then supported by reproduction.
+- **Know this:**
+  - Before blaming a merge, compare the PR's own run with the run on main. PR #5 only added Markdown, so the merge could not have caused it.
+  - Read the framework's source instead of guessing. It is public on GitHub, and you can pick the branch that matches your version.
+  - Make a rare failure happen often to prove a fix (the same idea as lesson 43). QA's stress loop of 32 parallel starts gave 69 failures in 18,000 (about 0.4%), plus an `ObjectDisposedException` from the same method. Run one at a time, it never failed. After the fix: 0 in 12,000.
+  - The fix was to stop passing a port to Kestrel and give the address through URLs instead:
+
+```csharp
+// before (in the factory's constructor): a port makes the factory
+// edit Addresses between Build() and Start()
+UseKestrel(0);
+
+// after (tests/TicketsApi.Tests/Tickets/KestrelFactory.cs, abridged)
+public KestrelFactory() => UseKestrel();   // no port
+
+protected override void ConfigureWebHost(IWebHostBuilder builder)
+{
+    base.ConfigureWebHost(builder);
+    builder
+        .UseUrls("http://127.0.0.1:0")      // port 0 = any free port
+        .UseSetting(WebHostDefaults.PreferHostingUrlsKey, "true");
+}
+```
+
+  - Put an infrastructure fix that affects main on its own branch (PR #7), not inside a feature ticket. T-005 then took the fix through a merge and removed its own two `UseKestrel(0)` calls.
+  - Rerunning the job from the CLI was blocked because the fine-grained token had no Actions write permission. The user reran it from the GitHub page instead of widening the token: least privilege beats convenience.
+  - The episode led to a read-only `devops-engineer` agent (PR #6) for CI investigations.
+- **Interview line:** "A test that fails once in 260 runs is still a bug. I compared runs to rule out the merge, read the framework source to find the race, reproduced it under parallel load, and fixed the cause, not the symptom."
