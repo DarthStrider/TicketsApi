@@ -1,11 +1,14 @@
 using System.Collections.Concurrent;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using TicketsApi.Data;
+using TicketsApi.Tests.Auth;
 
 namespace TicketsApi.Tests;
 
@@ -35,13 +38,27 @@ public class TicketsApiFactory : WebApplicationFactory<Program>
 
     protected bool ApplyMigrations { get; } = true;
 
+    // T-006 criteria 24 and 25: by default every request is signed in through the test scheme, as an agent.
+    // JwtFactory turns this off to test the real JWT bearer validation.
+    protected virtual bool UseTestAuthentication => true;
+
+    // Placeholder identity provider settings, so hosts in Production start (criterion 8). They are never contacted:
+    // test hosts authenticate through the test scheme, and JwtFactory supplies its own keys.
+    public const string TestAuthority = "https://login.tickets.test/";
+    public const string TestAudience = "tickets-api";
+
     public static string NewDatabasePath() =>
         Path.Combine(Path.GetTempPath(), $"tickets-test-{Guid.NewGuid():N}.db");
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         string path = _fixedDatabasePath ?? NewDatabasePath();
-        Dictionary<string, string?> settings = new() { ["ConnectionStrings:Tickets"] = $"Data Source={path}" };
+        Dictionary<string, string?> settings = new()
+        {
+            ["ConnectionStrings:Tickets"] = $"Data Source={path}",
+            ["Authentication:Schemes:Bearer:Authority"] = TestAuthority,
+            ["Authentication:Schemes:Bearer:Audience"] = TestAudience,
+        };
         if (_fixedDatabasePath is null)
         {
             // A fallback for a host that never finished starting: deleted when this factory is disposed.
@@ -50,6 +67,20 @@ public class TicketsApiFactory : WebApplicationFactory<Program>
         }
 
         builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(settings));
+
+        if (UseTestAuthentication)
+        {
+            // Registered after the app's own services, so the test scheme becomes the default for every operation.
+            builder.ConfigureTestServices(services => services
+                .AddAuthentication(options =>
+                {
+                    options.DefaultScheme = TestAuthHandler.SchemeName;
+                    options.DefaultAuthenticateScheme = TestAuthHandler.SchemeName;
+                    options.DefaultChallengeScheme = TestAuthHandler.SchemeName;
+                    options.DefaultForbidScheme = TestAuthHandler.SchemeName;
+                })
+                .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>(TestAuthHandler.SchemeName, _ => { }));
+        }
 
         // Like a deploy step, the schema is applied before the host starts, in every environment the tests use,
         // including Production, where the API itself refuses to start with pending migrations (criteria 15, 20).

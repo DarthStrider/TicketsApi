@@ -18,6 +18,7 @@
 8. Given a request that fails validation (each `errors` message in the "Message text" table, on POST `/tickets`, GET `/tickets?status=` and PATCH `/tickets/{id}/status`), when it is sent with `Accept-Language: fr`, then every message in `errors` is in French. Without the header, it is in English.
 9. Given each error response (`400` with `errors`, `400` without `errors`, `404` for an unknown id, `404` for a non-GUID id, `405` for another verb on `/tickets/{id}/status`, `409`, `413`, `415` and `500`), when it is sent with `Accept-Language: fr`, then the ProblemDetails `title` is in French. Without the header, it is in English.
    - The `500` is tested by replacing `ITicketStore` with one that throws, in the test host.
+   - Changed by T-006 (criterion 27): adds Title401 and Title403 (`401` and `403` titles in both languages).
 10. The language applies to every error path, including errors raised by the framework or the middleware (malformed or wrong-type JSON on POST, `413`, `415` on POST, `404` for a non-GUID route, `500`), not only errors returned by the endpoint code.
 
 ### What clients parse does not change
@@ -57,3 +58,10 @@ The "Key" column is the `.resx` resource name. French uses a regular space befor
 | Title415 | title | Unsupported Media Type | Type de média non pris en charge |
 | Title405 | title | Method Not Allowed | Méthode non autorisée |
 | Title500 | title | An error occurred while processing your request. | Une erreur s'est produite lors du traitement de votre requête. |
+
+Changed by T-006 (criterion 27): adds Title401 and Title403.
+
+| Key | Where | English | French |
+|---|---|---|---|
+| Title401 | title | Unauthorized | Authentification requise |
+| Title403 | title | Forbidden | Accès refusé |

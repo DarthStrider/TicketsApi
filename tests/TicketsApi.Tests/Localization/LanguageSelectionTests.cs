@@ -171,7 +171,7 @@ public class LanguageSelectionTests(TicketsApiFactory factory)
         public Task AddAsync(Ticket ticket, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
-        public Task<IReadOnlyList<Ticket>> ListAsync(TicketStatus? status, CancellationToken cancellationToken) =>
+        public Task<IReadOnlyList<Ticket>> ListAsync(TicketStatus? status, string? createdBy, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
         public Task<Ticket?> TryUpdateStatusAsync(

@@ -286,7 +286,7 @@ public class LocalizedMessagesTests(TicketsApiFactory factory)
 
         public Task<Ticket?> GetAsync(Guid id, CancellationToken cancellationToken) => throw Broken();
 
-        public Task<IReadOnlyList<Ticket>> ListAsync(TicketStatus? status, CancellationToken cancellationToken) =>
+        public Task<IReadOnlyList<Ticket>> ListAsync(TicketStatus? status, string? createdBy, CancellationToken cancellationToken) =>
             throw Broken();
 
         public Task<Ticket?> TryUpdateStatusAsync(

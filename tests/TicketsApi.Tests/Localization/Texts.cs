@@ -30,6 +30,9 @@ internal static class Texts
                 "One or more validation errors occurred.",
                 "Une ou plusieurs erreurs de validation se sont produites."),
             ["Title400"] = ("Bad Request", "Requête incorrecte"),
+            // T-006 criterion 27 (added to T-004's table, wording approved by the product owner).
+            ["Title401"] = ("Unauthorized", "Authentification requise"),
+            ["Title403"] = ("Forbidden", "Accès refusé"),
             ["Title404"] = ("Not Found", "Ressource introuvable"),
             ["Title409"] = ("Conflict", "Conflit"),
             ["Title413"] = ("Content Too Large", "Contenu trop volumineux"),

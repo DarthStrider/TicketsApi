@@ -22,4 +22,8 @@ internal sealed class Ticket
     public string? Description { get; init; }
     public required TicketStatus Status { get; init; }
     public required DateTimeOffset CreatedAt { get; init; }
+
+    // The creator's `sub` (T-006 criterion 14), which decides who may read the ticket. Null for tickets created
+    // before T-006 (criterion 18). Never in a response: ToResponse doesn't map it (criterion 19).
+    public string? CreatedBy { get; init; }
 }

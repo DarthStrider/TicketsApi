@@ -1,9 +1,11 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Localization;
 using Microsoft.Net.Http.Headers;
+using TicketsApi.Auth;
 using TicketsApi.Localization;
 
 namespace TicketsApi.Features.Tickets;
@@ -27,7 +29,10 @@ public static class TicketsEndpoints
         group.MapGet("{id:guid}", GetTicketAsync);
         group.MapGet("", ListTicketsAsync);
 
-        group.MapPatch("{id:guid}/status", ChangeStatusAsync)
+        // No :guid constraint here: the agent check (403) must come before the route's 404 for a non-GUID id
+        // (T-006 criteria 20 and 22), and a policy only runs on a matched endpoint. The handler parses the id first.
+        group.MapPatch("{id}/status", ChangeStatusAsync)
+            .RequireAuthorization(AuthSetup.AgentPolicy)
             .WithMetadata(new RequestSizeLimitAttribute(MaxRequestBodyBytes));
 
         return app;
@@ -36,8 +41,9 @@ public static class TicketsEndpoints
     // How many writes a status change tries before giving up with 409 (T-003 criterion 25).
     private const int MaxStatusWriteAttempts = 3;
 
-    // Checks run in the order T-003 criterion 23 requires: route (404), content type (415), body (400),
-    // lookup (404), transition (409).
+    // Checks run in the order T-006 criterion 22 requires (it changes T-003 criterion 23): authentication (401) and
+    // the agent role (403) run before this handler, then route (404), content type (415), body (400),
+    // lookup and read authorization (404), transition (409).
     // The body is read here, not bound by the framework, for two reasons:
     // - The content type must be checked first. Minimal APIs accept any "+json" type and would parse
     //   (and reject with 400) an application/merge-patch+json body before this handler runs.
@@ -45,12 +51,20 @@ public static class TicketsEndpoints
     //   TicketStatus would accept numbers and give generic errors.
     private static async Task<Results<Ok<TicketResponse>, ValidationProblem, NotFound, ProblemHttpResult>>
         ChangeStatusAsync(
-            Guid id,
+            string id,
             HttpRequest request,
+            ClaimsPrincipal user,
             ITicketStore store,
+            ITicketAccess access,
             IStringLocalizer<Messages> localizer,
             CancellationToken cancellationToken)
     {
+        // The route's 404 for a non-GUID id, as the :guid constraint gives on GET (T-002 criterion 3).
+        if (!Guid.TryParse(id, out Guid ticketId))
+        {
+            return TypedResults.NotFound();
+        }
+
         if (!IsPlainJson(request.ContentType))
         {
             return TypedResults.Problem(statusCode: StatusCodes.Status415UnsupportedMediaType);
@@ -80,8 +94,10 @@ public static class TicketsEndpoints
         // The loop ends: at most MaxStatusWriteAttempts writes, and the read after the last lost write always returns.
         for (int attempt = 1; ; attempt++)
         {
-            Ticket? ticket = await store.GetAsync(id, cancellationToken);
-            if (ticket is null)
+            // A ticket the caller may not read looks exactly like an unknown one, so neither the 409's currentStatus
+            // nor the same-status 200 can reveal it (T-006 criterion 21, from the T-003 security audit).
+            Ticket? ticket = await store.GetAsync(ticketId, cancellationToken);
+            if (ticket is null || !access.CanRead(user, ticket))
             {
                 return TypedResults.NotFound();
             }
@@ -98,7 +114,7 @@ public static class TicketsEndpoints
                 return TransitionConflict(ticket.Status, requested);
             }
 
-            Ticket? updated = await store.TryUpdateStatusAsync(id, ticket.Status, requested, cancellationToken);
+            Ticket? updated = await store.TryUpdateStatusAsync(ticketId, ticket.Status, requested, cancellationToken);
             if (updated is not null)
             {
                 return TypedResults.Ok(ToResponse(updated));
@@ -163,13 +179,16 @@ public static class TicketsEndpoints
 
     private static async Task<Results<Ok<TicketResponse>, NotFound>> GetTicketAsync(
         Guid id,
+        ClaimsPrincipal user,
         ITicketStore store,
+        ITicketAccess access,
         CancellationToken cancellationToken)
     {
         Ticket? ticket = await store.GetAsync(id, cancellationToken);
 
+        // Someone else's ticket gets the same 404 as an unknown id (T-006 criterion 15).
         // The empty 404 becomes ProblemDetails through AddProblemDetails + UseStatusCodePages in Program.cs.
-        return ticket is null
+        return ticket is null || !access.CanRead(user, ticket)
             ? TypedResults.NotFound()
             : TypedResults.Ok(ToResponse(ticket));
     }
@@ -177,7 +196,9 @@ public static class TicketsEndpoints
     // Bound as an array so a repeated ?status= can be detected and rejected (T-002 criterion 15).
     private static async Task<Results<Ok<TicketListResponse>, ValidationProblem>> ListTicketsAsync(
         [FromQuery] string[]? status,
+        ClaimsPrincipal user,
         ITicketStore store,
+        ITicketAccess access,
         IStringLocalizer<Messages> localizer,
         CancellationToken cancellationToken)
     {
@@ -195,7 +216,8 @@ public static class TicketsEndpoints
             filter = parsed;
         }
 
-        IReadOnlyList<Ticket> tickets = await store.ListAsync(filter, cancellationToken);
+        // Non-agents see only their own tickets, filtered by the database (T-006 criterion 17).
+        IReadOnlyList<Ticket> tickets = await store.ListAsync(filter, access.ListCreatorFilter(user), cancellationToken);
 
         return TypedResults.Ok(new TicketListResponse([.. tickets.Select(ToResponse)]));
     }
@@ -222,6 +244,7 @@ public static class TicketsEndpoints
 
     private static async Task<Results<Created<TicketResponse>, ValidationProblem>> CreateTicketAsync(
         CreateTicketRequest request,
+        ClaimsPrincipal user,
         ITicketStore store,
         IStringLocalizer<Messages> localizer,
         TimeProvider timeProvider,
@@ -240,6 +263,7 @@ public static class TicketsEndpoints
             Description = request.Description,
             Status = TicketStatus.Open,
             CreatedAt = timeProvider.GetUtcNow(),
+            CreatedBy = user.Subject(), // T-006 criterion 14
         };
 
         await store.AddAsync(ticket, cancellationToken);

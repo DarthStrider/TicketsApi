@@ -7,7 +7,8 @@ internal interface ITicketStore
     Task<Ticket?> GetAsync(Guid id, CancellationToken cancellationToken);
 
     // Newest first: createdAt descending, then id descending for ties (T-002 criteria 4 and 5).
-    Task<IReadOnlyList<Ticket>> ListAsync(TicketStatus? status, CancellationToken cancellationToken);
+    // createdBy: only the tickets that user created, or null for every ticket (T-006 criterion 17).
+    Task<IReadOnlyList<Ticket>> ListAsync(TicketStatus? status, string? createdBy, CancellationToken cancellationToken);
 
     // Atomic check-and-set (T-003 criterion 24): sets the status to `next` only if it is still `expected`.
     // Returns the updated ticket, or null if the ticket is missing or its status is no longer `expected`.

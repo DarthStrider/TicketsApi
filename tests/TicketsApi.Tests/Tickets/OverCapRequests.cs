@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Text;
+using TicketsApi.Tests.Auth;
 
 namespace TicketsApi.Tests.Tickets;
 
@@ -21,8 +22,9 @@ internal static class OverCapRequests
     private static readonly HttpClient Client = new(new SocketsHttpHandler { Expect100ContinueTimeout = ContinueTimeout });
 
     // `server` is a client from the Kestrel factory; only its base address is used.
+    // `testUser` picks the caller (TestAuthHandler's X-Test-User format); null means the default test user.
     public static Task<HttpResponseMessage> SendAsync(
-        HttpClient server, HttpMethod method, string url, string json, string? acceptLanguage = null)
+        HttpClient server, HttpMethod method, string url, string json, string? acceptLanguage = null, string? testUser = null)
     {
         HttpRequestMessage request = new(method, new Uri(server.BaseAddress!, url))
         {
@@ -33,6 +35,11 @@ internal static class OverCapRequests
         if (acceptLanguage is not null)
         {
             request.Headers.TryAddWithoutValidation("Accept-Language", acceptLanguage);
+        }
+
+        if (testUser is not null)
+        {
+            request.Headers.Add(TestAuthHandler.Header, testUser);
         }
 
         return Client.SendAsync(request, TestContext.Current.CancellationToken);

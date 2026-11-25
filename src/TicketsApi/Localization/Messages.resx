@@ -40,6 +40,12 @@
   <data name="Title400" xml:space="preserve">
     <value>Bad Request</value>
   </data>
+  <data name="Title401" xml:space="preserve">
+    <value>Unauthorized</value>
+  </data>
+  <data name="Title403" xml:space="preserve">
+    <value>Forbidden</value>
+  </data>
   <data name="Title404" xml:space="preserve">
     <value>Not Found</value>
   </data>

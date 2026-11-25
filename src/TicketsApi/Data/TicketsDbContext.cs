@@ -36,5 +36,10 @@ internal sealed class TicketsDbContext(DbContextOptions<TicketsDbContext> option
             ticks => new DateTimeOffset(ticks, TimeSpan.Zero));
 
         ticket.Property<int>(VersionProperty).IsConcurrencyToken();
+
+        // T-006 criteria 14 and 19: the creator's sub. Nullable, because tickets from before T-006 have none.
+        // Indexed for the non-agent list, which filters on it (criterion 17).
+        ticket.Property(t => t.CreatedBy);
+        ticket.HasIndex(t => t.CreatedBy);
     }
 }

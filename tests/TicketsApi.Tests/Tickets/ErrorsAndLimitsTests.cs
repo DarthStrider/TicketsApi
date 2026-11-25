@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using TicketsApi.Features.Tickets;
+using TicketsApi.Tests.Auth;
 
 namespace TicketsApi.Tests.Tickets;
 
@@ -60,6 +61,17 @@ public abstract class ErrorsAndLimitsTests<TFactory> : IClassFixture<TFactory>
         HttpResponseMessage response = await OverCapRequests.SendAsync(_client, HttpMethod.Post, "/tickets", ValidTicketJsonOfSize(Cap + 1));
 
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
+        await AssertProblemDetailsAsync(response);
+    }
+
+    // T-006 criterion 22: on POST, 401 comes before 413.
+    [Fact]
+    public async Task Anonymous_body_over_the_cap_returns_401()
+    {
+        HttpResponseMessage response = await OverCapRequests.SendAsync(
+            _client, HttpMethod.Post, "/tickets", ValidTicketJsonOfSize(Cap + 1), testUser: TestAuthHandler.Anonymous);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         await AssertProblemDetailsAsync(response);
     }
 
