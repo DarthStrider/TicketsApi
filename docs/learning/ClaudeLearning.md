@@ -580,3 +580,68 @@ git switch -c feature/T-011-explicit-types
 
   - Never relay approval the user didn't give, not even to an internal agent. Agents act on what they are told, so a false "the product owner confirmed" becomes a real decision nobody made. If approval is missing, ask the user, or label the item as a proposal.
 - **Interview line:** "I don't call a PR ready while an agent is still writing to its branch, and I never tell an agent the product owner approved something they haven't seen. When I caught myself doing that once, I stopped and asked the user before anything relied on it."
+
+### 53. Let a tool do the mechanical work, then check what it wrote (T-011)
+
+- **What happened:** T-011 replaced about 496 `var`s with explicit types. `dotnet format style --diagnostics IDE0008 IDE0090` converted almost all of them. But the fixer wrote `?` on 15 values that can never be null, for example `out Dictionary<string, string[]>? errors` and `foreach (string? s in new[] { "Open", ... })`. The build passed, and the developer reported "nullable annotations stayed exact" after checking only that no `!` had been added. The code-reviewer caught the extra `?`s.
+- **Why:** with nullable reference types on, C# treats a `var` local of a reference type as nullable (`var s = "x";` declares a `string?`) and relies on flow analysis to know it isn't null at that point. The fixer wrote out the declared type, `?` included. An extra `?` is legal, so neither the compiler nor the new rules could flag it. The claim had been checked in one direction only.
+- **Know this:**
+  - A code fixer is great for bulk, mechanical edits, but its output is a draft. Review the diff like any other agent's work.
+  - A nullability change can go two ways: a `!` added (hides a possible null) or a `?` added (says "may be null" when it can't, which invites pointless null checks). Check both.
+  - "The build passes" only proves what the build checks. When you claim something, say how you checked it.
+
+```csharp
+// What the fixer wrote (legal, but wrong about the value)
+foreach (string? s in new[] { "Open", "Closed" }) { }
+// What the code means
+foreach (string s in new[] { "Open", "Closed" }) { }
+```
+
+- **Interview line:** "I let `dotnet format` do the 500 mechanical edits, then reviewed its output, because a legal but wrong `?` doesn't fail any build. And I only claim what I actually checked: I had looked for added `!` but not added `?`, and the reviewer caught it."
+
+### 54. For a refactor, "test first" becomes "enforcement first" (T-011)
+
+- **What happened:** a refactor like T-011 changes no behaviour, so there is no new failing test to write. Instead, the first step was turning the rule on: `.editorconfig` with IDE0008 and IDE0090, plus `EnforceCodeStyleInBuild` in `Directory.Build.props`. The build then failed on the existing `var`s (red); after the conversion it passed (green). The ticket also asked for proof lines: temporarily add something like `var now = DateTime.UtcNow;` and show the build rejects it. The product-manager caught that the first proposed proof line, `var count = 0;`, would also raise CS0219 (variable assigned but its value never used), so the failure couldn't be pinned on the `var` rule.
+- **Why:** a check you never saw fail might not be checking anything. A proof needs one cause for one failure; a line that triggers two errors proves nothing about either.
+- **Know this:**
+  - Red, then green, works for rules as well as behaviour: enable the rule, watch it fail on real code, then fix the code.
+  - Pick a proof that can only fail for the reason you are testing. `var now = DateTime.UtcNow;` assigns a method result, not a constant, so CS0219 doesn't fire.
+  - IDE rules such as IDE0008 and IDE0090 normally run only in the editor. `EnforceCodeStyleInBuild` makes `dotnet build` run them, and `TreatWarningsAsErrors` turns the warnings into errors, so the commit hook and CI enforce them.
+- **Interview line:** "For a refactor I turn enforcement on first and show the build failing, then convert until it's green. And I make each proof fail for exactly one reason, otherwise it doesn't prove the rule works."
+
+### 55. Prove enforcement by breaking it on purpose (T-011)
+
+- **What happened:** QA didn't stop at "the build rejects `var`". It also showed that with `dotnet_diagnostic.IDE0008.severity = none`, or without `EnforceCodeStyleInBuild`, a `var` builds fine. So both settings are load-bearing: removing either one silently switches the rule off.
+- **Why:** a rule can appear to work for the wrong reason, for example because another setting happens to catch the same thing. Breaking each piece shows which pieces actually do the work.
+- **Know this:**
+  - This is mutation testing applied to configuration: change one setting, confirm the check stops working, put it back.
+  - Knowing which settings are load-bearing tells future readers what they must not "clean up". A comment next to the setting helps; the repo's `.editorconfig` has one.
+- **Interview line:** "I don't just show a rule fires; I turn off each setting it depends on and show it stops firing. Then I know exactly which lines of config hold the rule up."
+
+### 56. A throwaway spike for what the docs don't say, and the limit of a green CI (T-011)
+
+- **What happened:** two questions had no clear answer in Microsoft's docs: what counts as an "apparent" type for IDE0090 (when `new()` is required), and whether `generated_code = true` in `.editorconfig` really excludes the EF Core migrations from the rules. A small throwaway project answered both by trying them. Later, CI on Linux passed, but that didn't prove the `[src/TicketsApi/Data/Migrations/**.cs]` glob matches on Linux: `InitialCreate.cs` contains no `var` and no `new`, so it would pass whether the glob matched or not.
+- **Why:** when docs are silent, guessing (or letting an agent answer from memory) gives a confident wrong answer. A check that has nothing to catch passes either way, so it proves nothing.
+- **Know this:**
+  - A spike is a small disposable experiment outside the real code. Run it, record the answer, delete it.
+  - Before counting a green run as proof, ask: "would this have failed if the thing were broken?" If the input can't trigger the failure, the pass tells you nothing.
+  - State the limit in the report, for example "glob verified on Windows; Linux CI passed, but the migrations have nothing for the rule to catch".
+- **Interview line:** "When the docs don't answer a question, I run a five-minute spike instead of trusting memory. And before I treat green CI as proof, I check that the input could actually have failed."
+
+### 57. Protecting main with a ruleset (T-011)
+
+- **What happened:** the user created a GitHub ruleset called "Protect Main": a pull request is required (with 0 approvals), the `build-and-test` status check must pass, force pushes and deletion are blocked, and it targets `main` only, not every branch. One side effect: `/finish-ticket` used to push learning notes straight to `main`. It no longer can, so these notes go through their own small PR.
+- **Why:** before this, nothing technical stopped a direct push to `main` or a merge with failing CI; it was only a rule in `CLAUDE.md`. GitHub doesn't let you approve your own PR, so on a one-person repo "1 approval required" would block every merge.
+- **Know this:**
+
+| Setting | Why |
+|---|---|
+| Require a pull request, 0 approvals | every change goes through a PR and CI; the solo owner can still merge |
+| Required status check `build-and-test` | a PR with red CI can't be merged |
+| Block force pushes | history on `main` can't be rewritten |
+| Restrict deletions | `main` can't be deleted by accident |
+| Target `main` only | feature branches stay free to push, rebase and delete |
+
+  - Server-side rules are the strongest layer: they apply to every person, agent and tool, even one with a missing or misconfigured local hook.
+  - When you tighten a rule, look for workflows that relied on the old freedom (here, `/finish-ticket` pushing to `main`) and update them.
+- **Interview line:** "Agent permissions and hooks run on my machine; a branch ruleset is enforced by GitHub for everyone. I require a PR and green CI on main with zero approvals, since you can't approve your own PR, and I check which workflows the new rule breaks."
