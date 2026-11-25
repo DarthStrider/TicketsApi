@@ -59,9 +59,8 @@ internal static class AuthSetup
                 options.TokenValidationParameters.NameClaimType = ClaimsPrincipalExtensions.SubjectClaim;
 
                 // Issuer, audience, lifetime and signature are always validated, with the default 5-minute clock
-                // skew (criterion 9). With JwtBearer 10.0.15 these are already the effective values (QA checked that
-                // removing them changes nothing); they are stated here so no configuration or later version can
-                // quietly turn them off.
+                // skew (criterion 9). Stated explicitly so no configuration binding or later version can turn them
+                // off. ProductionJwtTests' "wrong issuer" and "wrong audience" cases pin the behaviour.
                 options.TokenValidationParameters.ValidateIssuer = true;
                 options.TokenValidationParameters.ValidateAudience = true;
                 options.TokenValidationParameters.ValidateLifetime = true;
@@ -69,8 +68,12 @@ internal static class AuthSetup
                 options.TokenValidationParameters.RequireSignedTokens = true;
 
                 // Outside Development, configuration must not be able to weaken this (criteria 6 and 9):
-                // metadata only over HTTPS, signing keys only from the provider's discovery document (never a
-                // configured key), and asymmetric algorithms only. Development keeps the `dotnet user-jwts` keys.
+                // - metadata only over HTTPS;
+                // - asymmetric algorithms only, which is what stops a configured `dotnet user-jwts` key: that binding
+                //   only produces symmetric keys (EdDSA isn't listed; a provider signing with Ed25519 would need it);
+                // - signing keys only from the provider's discovery document. Clearing configured keys is a backstop
+                //   behind the algorithm list, in case a later version binds asymmetric keys from configuration.
+                // Development keeps the `dotnet user-jwts` keys.
                 if (!environment.IsDevelopment())
                 {
                     options.RequireHttpsMetadata = true;
@@ -104,6 +107,8 @@ internal static class AuthSetup
             // Changing a status needs the agent role (criterion 20). The rule itself lives in ITicketAccess.
             .AddPolicy(AgentPolicy, policy => policy.RequireAuthenticatedUser().AddRequirements(new AgentRequirement()));
 
+        // A singleton that holds ITicketAccess: fine while TicketAccess is a singleton too. If it ever needs a scoped
+        // service (the database, for example), register this handler as scoped as well.
         services.AddSingleton<IAuthorizationHandler, AgentAuthorizationHandler>();
         services.AddSingleton<ITicketAccess, TicketAccess>();
         return services;

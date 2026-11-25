@@ -1,10 +1,8 @@
 using System.Net;
 using System.Net.Http.Headers;
-using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.IdentityModel.Tokens;
 using static TicketsApi.Tests.Tickets.TicketTestHelpers;
 
 namespace TicketsApi.Tests.Auth;
@@ -68,32 +66,13 @@ public class JwtValidationTests(JwtFactory factory) : IClassFixture<JwtFactory>
 
     // ---- Invalid tokens (criteria 2, 4 and 9) ----
 
-    public static TheoryData<string> InvalidTokenCases =>
-    [
-        "malformed", "expired", "not yet valid", "other key", "alg none", "no signature", "wrong issuer",
-        "wrong audience", "no sub", "empty sub",
-    ];
+    public static TheoryData<string> InvalidTokenCases => new(TestTokens.InvalidScenarios);
 
     [Theory]
     [MemberData(nameof(InvalidTokenCases))]
     public async Task Invalid_token_returns_401(string scenario)
     {
-        DateTime now = DateTime.UtcNow;
-        string token = scenario switch
-        {
-            "malformed" => "not-a-jwt",
-            // Beyond the default 5-minute clock skew (criterion 9).
-            "expired" => TestTokens.Create(factory, notBefore: now.AddHours(-2), expires: now.AddMinutes(-10)),
-            "not yet valid" => TestTokens.Create(factory, notBefore: now.AddMinutes(10), expires: now.AddHours(1)),
-            "other key" => TestTokens.Create(factory, signingKey: new RsaSecurityKey(RSA.Create(2048)) { KeyId = "test-key" }),
-            "alg none" => TestTokens.CreateUnsigned(),
-            "no signature" => TestTokens.CreateWithoutSignature(factory),
-            "wrong issuer" => TestTokens.Create(factory, issuer: "https://evil.test/"),
-            "wrong audience" => TestTokens.Create(factory, audience: "another-api"),
-            "no sub" => TestTokens.Create(factory, sub: null),
-            "empty sub" => TestTokens.Create(factory, sub: ""),
-            _ => throw new ArgumentOutOfRangeException(nameof(scenario)),
-        };
+        string token = TestTokens.ForInvalidScenario(factory, scenario);
 
         HttpResponseMessage response = await factory.CreateClientWithToken(token)
             .GetAsync("/tickets", TestContext.Current.CancellationToken);

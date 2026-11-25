@@ -31,27 +31,13 @@ public class ProductionJwtTests(JwtFactory factory) : IClassFixture<JwtFactory>
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
-    public static TheoryData<string> InvalidTokenCases =>
-    [
-        "expired", "not yet valid", "other key", "alg none", "wrong issuer", "wrong audience", "no sub",
-    ];
+    public static TheoryData<string> InvalidTokenCases => new(TestTokens.InvalidScenarios);
 
     [Theory]
     [MemberData(nameof(InvalidTokenCases))]
     public async Task Invalid_token_returns_401_in_production(string scenario)
     {
-        DateTime now = DateTime.UtcNow;
-        string token = scenario switch
-        {
-            "expired" => TestTokens.Create(factory, notBefore: now.AddHours(-2), expires: now.AddMinutes(-10)),
-            "not yet valid" => TestTokens.Create(factory, notBefore: now.AddMinutes(10), expires: now.AddHours(1)),
-            "other key" => TestTokens.Create(factory, signingKey: new RsaSecurityKey(RSA.Create(2048)) { KeyId = "test-key" }),
-            "alg none" => TestTokens.CreateUnsigned(),
-            "wrong issuer" => TestTokens.Create(factory, issuer: "https://evil.test/"),
-            "wrong audience" => TestTokens.Create(factory, audience: "another-api"),
-            "no sub" => TestTokens.Create(factory, sub: null),
-            _ => throw new ArgumentOutOfRangeException(nameof(scenario)),
-        };
+        string token = TestTokens.ForInvalidScenario(factory, scenario);
         using WebApplicationFactory<Program> app = Production();
 
         HttpResponseMessage response = await SendAsync(app, token);
@@ -76,10 +62,11 @@ public class ProductionJwtTests(JwtFactory factory) : IClassFixture<JwtFactory>
         Assert.Contains("HTTPS", AllMessages(error), StringComparison.OrdinalIgnoreCase);
     }
 
-    // Criterion 6: keys come only from the provider's discovery document. A symmetric key in configuration (the
-    // `dotnet user-jwts` format) must not let anyone who knows it mint tokens in Production.
+    // Criterion 6: a key in configuration (the `dotnet user-jwts` format, always symmetric) must not let anyone who
+    // knows it mint tokens in Production. The algorithm allow-list is what rejects it; clearing configured keys is a
+    // backstop that this test can't isolate, because configuration can't supply an asymmetric key today.
     [Fact]
-    public async Task Signing_key_from_configuration_is_ignored_in_production()
+    public async Task Configured_user_jwts_key_cannot_be_used_in_production()
     {
         (SymmetricSecurityKey key, Dictionary<string, string?> settings) = ConfiguredSymmetricKey();
         using WebApplicationFactory<Program> app = Production(settings);
