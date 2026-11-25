@@ -32,7 +32,8 @@ is wrong for that case. Say so in the review instead of following it blindly.
   `List<Ticket> tickets = new();`, `JsonSerializerOptions options = new() { ... };`.
 - **The only exception** is anonymous types, which have no name to write (`var payload = new { title = "t" };`,
   or a LINQ projection to an anonymous type).
-- This applies to new and changed lines. Converting the existing `var`s is a separate chore, not part of a ticket.
+- Since T-011 the build enforces this for all code except the generated migrations: a `var` with a named type
+  (IDE0008) or a `new Type(...)` that repeats the declared type (IDE0090) fails `dotnet build`, the commit hook and CI.
 
 ## 3. Functions and modules: deep, not just small
 

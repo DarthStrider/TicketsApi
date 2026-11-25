@@ -1,5 +1,6 @@
 using System.Net;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,7 +24,7 @@ public class ConnectionStringTests(TicketsApiFactory factory) : IClassFixture<Ti
     [InlineData("a/b/c.db")]
     public void Relative_data_source_is_resolved_against_the_content_root(string relative)
     {
-        var resolved = DataSourceOf(Resolve($"Data Source={relative}"));
+        string resolved = DataSourceOf(Resolve($"Data Source={relative}"));
 
         Assert.Equal(Path.GetFullPath(Path.Combine(ContentRoot, relative)), Path.GetFullPath(resolved));
         Assert.True(Path.IsPathFullyQualified(resolved));
@@ -32,7 +33,7 @@ public class ConnectionStringTests(TicketsApiFactory factory) : IClassFixture<Ti
     [Fact]
     public void Other_keys_are_kept_when_the_data_source_is_resolved()
     {
-        var builder = new SqliteConnectionStringBuilder(Resolve("Data Source=x.db;Cache=Shared;Pooling=False"));
+        SqliteConnectionStringBuilder builder = new(Resolve("Data Source=x.db;Cache=Shared;Pooling=False"));
 
         Assert.Equal(SqliteCacheMode.Shared, builder.Cache);
         Assert.False(builder.Pooling);
@@ -41,7 +42,7 @@ public class ConnectionStringTests(TicketsApiFactory factory) : IClassFixture<Ti
     [Fact]
     public void Absolute_data_source_is_unchanged()
     {
-        var absolute = Path.Combine(Path.GetTempPath(), "elsewhere", "tickets.db");
+        string absolute = Path.Combine(Path.GetTempPath(), "elsewhere", "tickets.db");
 
         Assert.Equal(absolute, DataSourceOf(Resolve($"Data Source={absolute}")));
     }
@@ -60,8 +61,8 @@ public class ConnectionStringTests(TicketsApiFactory factory) : IClassFixture<Ti
     [Fact]
     public void Create_database_folder_creates_missing_folders()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"tickets-folder-{Guid.NewGuid():N}");
-        var folder = Path.Combine(root, "nested", "deeper");
+        string root = Path.Combine(Path.GetTempPath(), $"tickets-folder-{Guid.NewGuid():N}");
+        string folder = Path.Combine(root, "nested", "deeper");
         try
         {
             TicketsDatabase.CreateDatabaseFolder($"Data Source={Path.Combine(folder, "tickets.db")}");
@@ -83,19 +84,19 @@ public class ConnectionStringTests(TicketsApiFactory factory) : IClassFixture<Ti
     [Fact]
     public async Task Host_with_relative_data_source_creates_the_database_under_its_content_root()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"tickets-root-{Guid.NewGuid():N}");
-        var relative = Path.Combine("App_Data", $"relative-{Guid.NewGuid():N}.db");
+        string root = Path.Combine(Path.GetTempPath(), $"tickets-root-{Guid.NewGuid():N}");
+        string relative = Path.Combine("App_Data", $"relative-{Guid.NewGuid():N}.db");
         Directory.CreateDirectory(root);
         try
         {
-            using (var app = factory.WithWebHostBuilder(builder =>
+            using (WebApplicationFactory<Program> app = factory.WithWebHostBuilder(builder =>
             {
                 builder.UseContentRoot(root);
                 builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(
                     new Dictionary<string, string?> { ["ConnectionStrings:Tickets"] = $"Data Source={relative}" }));
             }))
             {
-                var response = await app.CreateClient().PostAsync(
+                HttpResponseMessage response = await app.CreateClient().PostAsync(
                     "/tickets",
                     new StringContent("""{ "title": "relative" }""", System.Text.Encoding.UTF8, "application/json"),
                     TestContext.Current.CancellationToken);
@@ -119,13 +120,13 @@ public class ConnectionStringTests(TicketsApiFactory factory) : IClassFixture<Ti
     [Fact]
     public void Development_settings_point_to_app_data_and_base_settings_have_no_default()
     {
-        var contentRoot = factory.Services.GetRequiredService<IHostEnvironment>().ContentRootPath;
+        string contentRoot = factory.Services.GetRequiredService<IHostEnvironment>().ContentRootPath;
 
-        var baseSettings = new ConfigurationBuilder()
+        IConfigurationRoot baseSettings = new ConfigurationBuilder()
             .SetBasePath(contentRoot)
             .AddJsonFile("appsettings.json", optional: false)
             .Build();
-        var development = new ConfigurationBuilder()
+        IConfigurationRoot development = new ConfigurationBuilder()
             .SetBasePath(contentRoot)
             .AddJsonFile("appsettings.json", optional: false)
             .AddJsonFile("appsettings.Development.json", optional: false)

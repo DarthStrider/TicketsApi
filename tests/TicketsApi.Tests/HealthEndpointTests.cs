@@ -9,9 +9,9 @@ public class HealthEndpointTests(TicketsApiFactory factory)
     [Fact]
     public async Task Health_returns_200()
     {
-        var client = factory.CreateClient();
+        HttpClient client = factory.CreateClient();
 
-        var response = await client.GetAsync("/health", TestContext.Current.CancellationToken);
+        HttpResponseMessage response = await client.GetAsync("/health", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using TicketsApi.Data;
 
 namespace TicketsApi.Features.Tickets;
@@ -10,7 +11,7 @@ internal sealed class EfTicketStore(TicketsDbContext db, TicketStoreTestHooks te
     {
         try
         {
-            var entry = db.Tickets.Add(ticket);
+            EntityEntry<Ticket> entry = db.Tickets.Add(ticket);
             entry.Property<int>(TicketsDbContext.VersionProperty).CurrentValue = 0; // explicit: a new ticket's version
             await db.SaveChangesAsync(cancellationToken);
         }
@@ -27,7 +28,7 @@ internal sealed class EfTicketStore(TicketsDbContext db, TicketStoreTestHooks te
     // Filtered and sorted by the database (T-005 criterion 5): newest first, then id descending for ties.
     public async Task<IReadOnlyList<Ticket>> ListAsync(TicketStatus? status, CancellationToken cancellationToken)
     {
-        var query = db.Tickets.AsNoTracking();
+        IQueryable<Ticket> query = db.Tickets.AsNoTracking();
         if (status is { } filter)
         {
             query = query.Where(t => t.Status == filter);
@@ -61,8 +62,8 @@ internal sealed class EfTicketStore(TicketsDbContext db, TicketStoreTestHooks te
             await hook(id, cancellationToken);
         }
 
-        var version = current.Version;
-        var updated = await db.Tickets
+        int version = current.Version;
+        int updated = await db.Tickets
             .Where(t => t.Id == id && EF.Property<int>(t, TicketsDbContext.VersionProperty) == version)
             .ExecuteUpdateAsync(
                 setters => setters

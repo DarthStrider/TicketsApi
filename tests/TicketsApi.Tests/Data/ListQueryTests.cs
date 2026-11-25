@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Data.Common;
 using System.Net;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -25,19 +26,19 @@ public class ListQueryTests(TicketsApiFactory factory) : IClassFixture<TicketsAp
     [InlineData("/tickets?status=open", true)]
     public async Task List_is_sorted_and_filtered_in_sql(string url, bool filtered)
     {
-        var ct = TestContext.Current.CancellationToken;
-        var recorder = new CommandRecorder();
-        using var app = factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        CommandRecorder recorder = new();
+        using WebApplicationFactory<Program> app = factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
             services.ConfigureDbContext<TicketsDbContext>(options => options.AddInterceptors(recorder))));
-        var client = app.CreateClient();
+        HttpClient client = app.CreateClient();
         await client.CreateTicketAsync("one");
         await client.CreateTicketInStatusAsync("InProgress");
         recorder.Clear();
 
-        var response = await client.GetAsync(url, ct);
+        HttpResponseMessage response = await client.GetAsync(url, ct);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var sql = Assert.Single(recorder.Commands, c => c.Contains("FROM \"Tickets\"", StringComparison.Ordinal));
+        string sql = Assert.Single(recorder.Commands, c => c.Contains("FROM \"Tickets\"", StringComparison.Ordinal));
         Assert.Matches(new Regex(@"ORDER BY ""\w+""\.""CreatedAt"" DESC, ""\w+""\.""Id"" DESC\s*$"), sql);
         if (filtered)
         {
@@ -56,18 +57,18 @@ public class ListQueryTests(TicketsApiFactory factory) : IClassFixture<TicketsAp
     [Fact]
     public async Task Ties_follow_guid_compare_to_for_random_ids()
     {
-        var ct = TestContext.Current.CancellationToken;
-        var path = TicketsApiFactory.NewDatabasePath();
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        string path = TicketsApiFactory.NewDatabasePath();
         try
         {
-            using var app = new FixedDatabaseFactory(path);
-            var client = app.CreateClient();
+            using FixedDatabaseFactory app = new(path);
+            HttpClient client = app.CreateClient();
 
-            var random = new Random(20261123);
-            var seeded = new List<Ticket>();
-            for (var i = 0; i < 60; i++)
+            Random random = new(20261123);
+            List<Ticket> seeded = new();
+            for (int i = 0; i < 60; i++)
             {
-                var bytes = new byte[16];
+                byte[] bytes = new byte[16];
                 random.NextBytes(bytes);
                 seeded.Add(new Ticket
                 {
@@ -80,17 +81,17 @@ public class ListQueryTests(TicketsApiFactory factory) : IClassFixture<TicketsAp
             }
 
             // Written through EF Core itself, so the ids are stored exactly as the API stores them.
-            await using (var db = new TicketsDbContext(
+            await using (TicketsDbContext db = new(
                 new DbContextOptionsBuilder<TicketsDbContext>().UseSqlite($"Data Source={path}").Options))
             {
                 db.Tickets.AddRange(seeded);
                 await db.SaveChangesAsync(ct);
             }
 
-            var body = await ReadJsonAsync(await client.GetAsync("/tickets", ct), ct);
-            var ids = body.GetProperty("items").EnumerateArray().Select(t => t.GetProperty("id").GetGuid()).ToList();
+            JsonElement body = await ReadJsonAsync(await client.GetAsync("/tickets", ct), ct);
+            List<Guid> ids = body.GetProperty("items").EnumerateArray().Select(t => t.GetProperty("id").GetGuid()).ToList();
 
-            var expected = seeded
+            List<Guid> expected = seeded
                 .OrderByDescending(t => t.CreatedAt)
                 .ThenByDescending(t => t.Id, Comparer<Guid>.Create((a, b) => a.CompareTo(b)))
                 .Select(t => t.Id)

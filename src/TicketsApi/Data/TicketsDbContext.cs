@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using TicketsApi.Features.Tickets;
 
 namespace TicketsApi.Data;
@@ -14,7 +15,7 @@ internal sealed class TicketsDbContext(DbContextOptions<TicketsDbContext> option
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        var ticket = modelBuilder.Entity<Ticket>();
+        EntityTypeBuilder<Ticket> ticket = modelBuilder.Entity<Ticket>();
         ticket.ToTable("Tickets");
 
         // Uppercase TEXT (the SQLite provider's default for Guid), which sorts like Guid.CompareTo (criterion 6).

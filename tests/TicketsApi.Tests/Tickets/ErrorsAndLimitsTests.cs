@@ -34,7 +34,7 @@ public abstract class ErrorsAndLimitsTests<TFactory> : IClassFixture<TFactory>
     [InlineData("""{ "title": "x" """)]
     public async Task Unreadable_body_returns_400_problem_details(string json)
     {
-        var response = await PostRawAsync(json);
+        HttpResponseMessage response = await PostRawAsync(json);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         await AssertProblemDetailsAsync(response);
@@ -43,7 +43,7 @@ public abstract class ErrorsAndLimitsTests<TFactory> : IClassFixture<TFactory>
     [Fact]
     public async Task Non_json_content_type_returns_415_problem_details()
     {
-        var response = await _client.PostAsync(
+        HttpResponseMessage response = await _client.PostAsync(
             "/tickets",
             new StringContent("title=t", Encoding.UTF8, "text/plain"),
             TestContext.Current.CancellationToken);
@@ -57,7 +57,7 @@ public abstract class ErrorsAndLimitsTests<TFactory> : IClassFixture<TFactory>
     [Fact]
     public async Task Body_one_byte_over_the_cap_returns_413_problem_details()
     {
-        var response = await OverCapRequests.SendAsync(_client, HttpMethod.Post, "/tickets", ValidTicketJsonOfSize(Cap + 1));
+        HttpResponseMessage response = await OverCapRequests.SendAsync(_client, HttpMethod.Post, "/tickets", ValidTicketJsonOfSize(Cap + 1));
 
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
         await AssertProblemDetailsAsync(response);
@@ -66,7 +66,7 @@ public abstract class ErrorsAndLimitsTests<TFactory> : IClassFixture<TFactory>
     [Fact]
     public async Task Body_exactly_at_the_cap_is_accepted()
     {
-        var response = await PostRawAsync(ValidTicketJsonOfSize(Cap));
+        HttpResponseMessage response = await PostRawAsync(ValidTicketJsonOfSize(Cap));
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
@@ -89,7 +89,7 @@ public abstract class ErrorsAndLimitsTests<TFactory> : IClassFixture<TFactory>
     [Fact]
     public async Task Max_length_multibyte_ticket_is_accepted_fully_escaped()
     {
-        var json = $$"""{ "title": "{{EscapeAll(MaxTitle)}}", "description": "{{EscapeAll(MaxDescription)}}" }""";
+        string json = $$"""{ "title": "{{EscapeAll(MaxTitle)}}", "description": "{{EscapeAll(MaxDescription)}}" }""";
         Assert.True(Encoding.UTF8.GetByteCount(json) > 25_000, "Escaped payload should be about 25 KB.");
 
         await AssertAcceptedAsync(json);
@@ -99,12 +99,12 @@ public abstract class ErrorsAndLimitsTests<TFactory> : IClassFixture<TFactory>
 
     private async Task AssertAcceptedAsync(string json)
     {
-        var ct = TestContext.Current.CancellationToken;
+        CancellationToken ct = TestContext.Current.CancellationToken;
 
-        var response = await PostRawAsync(json);
+        HttpResponseMessage response = await PostRawAsync(json);
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        using var body = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+        using JsonDocument body = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
         Assert.Equal(MaxTitle, body.RootElement.GetProperty("title").GetString());
         Assert.Equal(MaxDescription, body.RootElement.GetProperty("description").GetString());
     }
@@ -115,7 +115,7 @@ public abstract class ErrorsAndLimitsTests<TFactory> : IClassFixture<TFactory>
     {
         const string prefix = "{\"title\":\"t\",\"pad\":\"";
         const string suffix = "\"}";
-        var json = prefix + new string('x', bytes - prefix.Length - suffix.Length) + suffix;
+        string json = prefix + new string('x', bytes - prefix.Length - suffix.Length) + suffix;
         Assert.Equal(bytes, Encoding.UTF8.GetByteCount(json));
         return json;
     }
@@ -132,10 +132,10 @@ public abstract class ErrorsAndLimitsTests<TFactory> : IClassFixture<TFactory>
 
     private static async Task AssertProblemDetailsAsync(HttpResponseMessage response)
     {
-        var ct = TestContext.Current.CancellationToken;
+        CancellationToken ct = TestContext.Current.CancellationToken;
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
 
-        using var body = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+        using JsonDocument body = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
         Assert.Equal((int)response.StatusCode, body.RootElement.GetProperty("status").GetInt32());
         Assert.False(body.RootElement.TryGetProperty("exception", out _), "ProblemDetails leaks exception details.");
     }

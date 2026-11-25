@@ -30,8 +30,8 @@ internal static class TicketTestHelpers
     public static async Task<JsonElement> CreateTicketAsync(
         this HttpClient client, string title, string? description = null)
     {
-        var ct = TestContext.Current.CancellationToken;
-        var response = await client.PostAsJsonAsync("/tickets", new { title, description }, ct);
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        HttpResponseMessage response = await client.PostAsJsonAsync("/tickets", new { title, description }, ct);
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         return await ReadJsonAsync(response, ct);
     }
@@ -43,7 +43,7 @@ internal static class TicketTestHelpers
     public static Task<HttpResponseMessage> PatchStatusRawAsync(
         this HttpClient client, string id, string json, string contentType = "application/json")
     {
-        var content = new StringContent(json, System.Text.Encoding.UTF8);
+        StringContent content = new(json, System.Text.Encoding.UTF8);
         content.Headers.ContentType = System.Net.Http.Headers.MediaTypeHeaderValue.Parse(contentType);
         return client.PatchAsync($"/tickets/{id}/status", content, TestContext.Current.CancellationToken);
     }
@@ -61,10 +61,10 @@ internal static class TicketTestHelpers
     // Creates a ticket and moves it to `status` through allowed PATCHes. Returns the ticket's id.
     public static async Task<Guid> CreateTicketInStatusAsync(this HttpClient client, string status, string title = "t")
     {
-        var id = (await client.CreateTicketAsync(title)).GetProperty("id").GetGuid();
-        foreach (var step in PathFromOpen[status])
+        Guid id = (await client.CreateTicketAsync(title)).GetProperty("id").GetGuid();
+        foreach (string step in PathFromOpen[status])
         {
-            var response = await client.PatchStatusAsync(id, new { status = step });
+            HttpResponseMessage response = await client.PatchStatusAsync(id, new { status = step });
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         }
 
@@ -73,8 +73,8 @@ internal static class TicketTestHelpers
 
     public static async Task<JsonElement> ReadJsonAsync(HttpResponseMessage response, CancellationToken ct)
     {
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+        await using Stream stream = await response.Content.ReadAsStreamAsync(ct);
+        using JsonDocument doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
         return doc.RootElement.Clone();
     }
 
@@ -85,7 +85,7 @@ internal static class TicketTestHelpers
         Assert.Equal(expected, response.StatusCode);
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
 
-        var body = await ReadJsonAsync(response, TestContext.Current.CancellationToken);
+        JsonElement body = await ReadJsonAsync(response, TestContext.Current.CancellationToken);
         Assert.Equal((int)expected, body.GetProperty("status").GetInt32());
         Assert.False(body.TryGetProperty("exception", out _), "ProblemDetails leaks exception details.");
         return body;
@@ -93,8 +93,8 @@ internal static class TicketTestHelpers
 
     public static async Task AssertValidationErrorAsync(HttpResponseMessage response, string field)
     {
-        var body = await AssertProblemDetailsAsync(response, HttpStatusCode.BadRequest);
-        Assert.True(body.TryGetProperty("errors", out var errors), "ProblemDetails has no 'errors'.");
+        JsonElement body = await AssertProblemDetailsAsync(response, HttpStatusCode.BadRequest);
+        Assert.True(body.TryGetProperty("errors", out JsonElement errors), "ProblemDetails has no 'errors'.");
         Assert.True(errors.TryGetProperty(field, out _), $"ProblemDetails errors does not name '{field}'.");
     }
 }

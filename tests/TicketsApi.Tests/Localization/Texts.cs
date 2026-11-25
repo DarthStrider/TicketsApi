@@ -54,7 +54,7 @@ internal static class Texts
         string? json = null,
         string contentType = "application/json")
     {
-        var request = new HttpRequestMessage(method, url);
+        HttpRequestMessage request = new(method, url);
         if (acceptLanguage is not null)
         {
             request.Headers.TryAddWithoutValidation("Accept-Language", acceptLanguage);

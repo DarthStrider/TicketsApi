@@ -18,7 +18,7 @@ public static class TicketsEndpoints
 
     public static IEndpointRouteBuilder MapTicketsEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/tickets");
+        RouteGroupBuilder group = app.MapGroup("/tickets");
 
         group.MapPost("", CreateTicketAsync)
             .WithMetadata(new RequestSizeLimitAttribute(MaxRequestBodyBytes));
@@ -61,8 +61,8 @@ public static class TicketsEndpoints
         {
             // The size cap (RequestSizeLimit) is enforced while reading: too large throws a 413 BadHttpRequestException.
             // The body is read as UTF-8, the encoding JSON requires (RFC 8259); a charset parameter is not transcoded.
-            using var document = await JsonDocument.ParseAsync(request.Body, cancellationToken: cancellationToken);
-            if (!TryReadRequestedStatus(document.RootElement, localizer, out requested, out var errors))
+            using JsonDocument document = await JsonDocument.ParseAsync(request.Body, cancellationToken: cancellationToken);
+            if (!TryReadRequestedStatus(document.RootElement, localizer, out requested, out Dictionary<string, string[]> errors))
             {
                 return TypedResults.ValidationProblem(errors);
             }
@@ -78,9 +78,9 @@ public static class TicketsEndpoints
         // Read, check, then compare-and-swap. If another change wins in between, re-read and evaluate again
         // (T-003 criterion 25), so every answer reflects a status the ticket actually had.
         // The loop ends: at most MaxStatusWriteAttempts writes, and the read after the last lost write always returns.
-        for (var attempt = 1; ; attempt++)
+        for (int attempt = 1; ; attempt++)
         {
-            var ticket = await store.GetAsync(id, cancellationToken);
+            Ticket? ticket = await store.GetAsync(id, cancellationToken);
             if (ticket is null)
             {
                 return TypedResults.NotFound();
@@ -98,7 +98,7 @@ public static class TicketsEndpoints
                 return TransitionConflict(ticket.Status, requested);
             }
 
-            var updated = await store.TryUpdateStatusAsync(id, ticket.Status, requested, cancellationToken);
+            Ticket? updated = await store.TryUpdateStatusAsync(id, ticket.Status, requested, cancellationToken);
             if (updated is not null)
             {
                 return TypedResults.Ok(ToResponse(updated));
@@ -117,7 +117,7 @@ public static class TicketsEndpoints
             });
 
     private static bool IsPlainJson(string? contentType) =>
-        MediaTypeHeaderValue.TryParse(contentType, out var mediaType)
+        MediaTypeHeaderValue.TryParse(contentType, out MediaTypeHeaderValue? mediaType)
         && string.Equals(mediaType.MediaType.Value, "application/json", StringComparison.OrdinalIgnoreCase);
 
     // T-003 criteria 12-19. Property names match case-insensitively, like the rest of the API's JSON binding,
@@ -137,7 +137,7 @@ public static class TicketsEndpoints
             return false;
         }
 
-        var values = body.EnumerateObject()
+        List<JsonElement> values = body.EnumerateObject()
             .Where(p => string.Equals(p.Name, "status", StringComparison.OrdinalIgnoreCase))
             .Select(p => p.Value)
             .ToList();
@@ -147,7 +147,7 @@ public static class TicketsEndpoints
             [] => "StatusRequired",
             [{ ValueKind: JsonValueKind.Null }] => "StatusRequired",
             [{ ValueKind: not JsonValueKind.String }] => "StatusMustBeOneOf",
-            [var value] when !TryParseStatus(value.GetString()!, out status) => "StatusMustBeOneOf",
+            [JsonElement value] when !TryParseStatus(value.GetString()!, out status) => "StatusMustBeOneOf",
             [_] => null,
             _ => "StatusRepeated",
         };
@@ -166,7 +166,7 @@ public static class TicketsEndpoints
         ITicketStore store,
         CancellationToken cancellationToken)
     {
-        var ticket = await store.GetAsync(id, cancellationToken);
+        Ticket? ticket = await store.GetAsync(id, cancellationToken);
 
         // The empty 404 becomes ProblemDetails through AddProblemDetails + UseStatusCodePages in Program.cs.
         return ticket is null
@@ -184,7 +184,7 @@ public static class TicketsEndpoints
         TicketStatus? filter = null;
         if (status is { Length: > 0 })
         {
-            if (status.Length > 1 || !TryParseStatus(status[0], out var parsed))
+            if (status.Length > 1 || !TryParseStatus(status[0], out TicketStatus parsed))
             {
                 return TypedResults.ValidationProblem(new Dictionary<string, string[]>
                 {
@@ -195,7 +195,7 @@ public static class TicketsEndpoints
             filter = parsed;
         }
 
-        var tickets = await store.ListAsync(filter, cancellationToken);
+        IReadOnlyList<Ticket> tickets = await store.ListAsync(filter, cancellationToken);
 
         return TypedResults.Ok(new TicketListResponse([.. tickets.Select(ToResponse)]));
     }
@@ -204,7 +204,7 @@ public static class TicketsEndpoints
     // accepts numeric strings, even undefined ones like "99", and also trims spaces and accepts "A,B" lists.
     private static bool TryParseStatus(string value, out TicketStatus status)
     {
-        foreach (var candidate in Enum.GetValues<TicketStatus>())
+        foreach (TicketStatus candidate in Enum.GetValues<TicketStatus>())
         {
             if (string.Equals(candidate.ToString(), value, StringComparison.OrdinalIgnoreCase))
             {
@@ -227,13 +227,13 @@ public static class TicketsEndpoints
         TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
-        var title = request.Title?.Trim();
-        if (!IsValid(title, request.Description, localizer, out var errors))
+        string? title = request.Title?.Trim();
+        if (!IsValid(title, request.Description, localizer, out Dictionary<string, string[]> errors))
         {
             return TypedResults.ValidationProblem(errors);
         }
 
-        var ticket = new Ticket
+        Ticket ticket = new()
         {
             Id = Guid.CreateVersion7(),
             Title = title,

@@ -14,8 +14,8 @@ public class ResourceFilesTests
     [Fact]
     public void Resource_files_have_the_same_keys_and_no_empty_values()
     {
-        var english = Load(CultureInfo.InvariantCulture);
-        var french = Load(CultureInfo.GetCultureInfo("fr"));
+        Dictionary<string, string> english = Load(CultureInfo.InvariantCulture);
+        Dictionary<string, string> french = Load(CultureInfo.GetCultureInfo("fr"));
 
         Assert.Equal(english.Keys.Order(), french.Keys.Order());
         Assert.All(english, entry => Assert.False(string.IsNullOrWhiteSpace(entry.Value), $"EN '{entry.Key}' is empty."));
@@ -26,7 +26,7 @@ public class ResourceFilesTests
     [Fact]
     public void Resource_keys_match_the_ticket_table()
     {
-        var english = Load(CultureInfo.InvariantCulture);
+        Dictionary<string, string> english = Load(CultureInfo.InvariantCulture);
 
         Assert.Equal(Texts.All.Keys.Order(), english.Keys.Order());
     }
@@ -35,8 +35,8 @@ public class ResourceFilesTests
     [Fact]
     public void Resource_values_match_the_ticket_table()
     {
-        var english = Load(CultureInfo.InvariantCulture);
-        var french = Load(CultureInfo.GetCultureInfo("fr"));
+        Dictionary<string, string> english = Load(CultureInfo.InvariantCulture);
+        Dictionary<string, string> french = Load(CultureInfo.GetCultureInfo("fr"));
 
         Assert.All(Texts.All, entry =>
         {
@@ -50,13 +50,13 @@ public class ResourceFilesTests
     [Fact]
     public void Resource_values_follow_the_status_names_and_limits_in_the_code()
     {
-        var statuses = string.Join(", ", Enum.GetNames<TicketStatus>());
-        var titleMax = TicketsEndpoints.TitleMaxLength.ToString(CultureInfo.InvariantCulture);
-        var descriptionMax = TicketsEndpoints.DescriptionMaxLength.ToString(CultureInfo.InvariantCulture);
+        string statuses = string.Join(", ", Enum.GetNames<TicketStatus>());
+        string titleMax = TicketsEndpoints.TitleMaxLength.ToString(CultureInfo.InvariantCulture);
+        string descriptionMax = TicketsEndpoints.DescriptionMaxLength.ToString(CultureInfo.InvariantCulture);
 
-        foreach (var culture in new[] { CultureInfo.InvariantCulture, CultureInfo.GetCultureInfo("fr") })
+        foreach (CultureInfo culture in new[] { CultureInfo.InvariantCulture, CultureInfo.GetCultureInfo("fr") })
         {
-            var resources = Load(culture);
+            Dictionary<string, string> resources = Load(culture);
             Assert.Contains(statuses + ".", resources["StatusMustBeOneOf"]);
             Assert.Contains($" {titleMax} ", resources["TitleTooLong"]);
             Assert.Contains($" {descriptionMax} ", resources["DescriptionTooLong"]);
@@ -66,8 +66,8 @@ public class ResourceFilesTests
     // Reads only the resources of that exact culture (no fallback to parents), so a missing French key shows up.
     private static Dictionary<string, string> Load(CultureInfo culture)
     {
-        var manager = new ResourceManager(BaseName, typeof(Program).Assembly);
-        var set = manager.GetResourceSet(culture, createIfNotExists: true, tryParents: false);
+        ResourceManager manager = new(BaseName, typeof(Program).Assembly);
+        ResourceSet? set = manager.GetResourceSet(culture, createIfNotExists: true, tryParents: false);
         Assert.NotNull(set);
 
         return set.Cast<DictionaryEntry>().ToDictionary(e => (string)e.Key, e => e.Value as string ?? "");

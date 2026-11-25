@@ -20,14 +20,14 @@ public class TestDatabaseCleanupTests
     [InlineData(true)]
     public async Task Factory_deletes_its_databases_when_disposed(bool disposeAsync)
     {
-        var factory = new TicketsApiFactory();
-        var derived = factory.WithWebHostBuilder(_ => { });
+        TicketsApiFactory factory = new();
+        WebApplicationFactory<Program> derived = factory.WithWebHostBuilder(_ => { });
 
-        var files = new List<string>();
-        foreach (var app in new WebApplicationFactory<Program>[] { factory, derived })
+        List<string> files = new();
+        foreach (WebApplicationFactory<Program> app in new WebApplicationFactory<Program>[] { factory, derived })
         {
             await app.CreateClient().CreateTicketAsync("written");
-            var path = DatabasePath(app);
+            string path = DatabasePath(app);
             Assert.StartsWith(Path.GetTempPath(), path);
             Assert.True(File.Exists(path), $"Expected the host's database at {path}.");
             files.AddRange([path, path + "-wal", path + "-shm"]);
@@ -62,11 +62,11 @@ public class TestDatabaseCleanupTests
         try
         {
             await fixture.CreateClient().CreateTicketAsync("in the fixture");
-            var fixturePath = DatabasePath(fixture);
+            string fixturePath = DatabasePath(fixture);
             Assert.True(File.Exists(fixturePath), $"Expected the fixture's database at {fixturePath}.");
 
             WebApplicationFactory<Program>? parent = null;
-            var derived = kind switch
+            WebApplicationFactory<Program> derived = kind switch
             {
                 "WithClock" => fixture.WithClock(new TestClock(DateTimeOffset.UnixEpoch)),
                 "Nested" => (parent = fixture.WithWebHostBuilder(_ => { })).WithWebHostBuilder(_ => { }),
@@ -112,7 +112,7 @@ public class TestDatabaseCleanupTests
             }
 
             // The fixture is still alive here: deletion must have happened when the derived host was disposed.
-            foreach (var file in new[] { path, path + "-wal", path + "-shm" })
+            foreach (string file in new[] { path, path + "-wal", path + "-shm" })
             {
                 Assert.False(File.Exists(file), $"{file} was not deleted when its host was disposed.");
             }
@@ -135,20 +135,20 @@ public class TestDatabaseCleanupTests
     [InlineData(true)]
     public async Task Kestrel_factory_deletes_its_databases_when_disposed(bool disposeAsync)
     {
-        var factory = new KestrelFactory();
+        KestrelFactory factory = new();
         try
         {
-            var derived = factory.WithWebHostBuilder(_ => { });
+            WebApplicationFactory<Program> derived = factory.WithWebHostBuilder(_ => { });
             derived.UseKestrel(); // not inherited, no port: see Derived_host_deletes_its_database_... and KestrelFactory
 
-            var files = new List<string>();
-            foreach (var (app, title) in new[] { (factory, "in the root"), (derived, "in the derived host") })
+            List<string> files = new();
+            foreach ((WebApplicationFactory<Program> app, string title) in new[] { (factory, "in the root"), (derived, "in the derived host") })
             {
-                var client = app == factory ? factory.CreateClient() : CreateKestrelClient(app);
+                HttpClient client = app == factory ? factory.CreateClient() : CreateKestrelClient(app);
                 AssertRunsOnKestrel(app, client);
                 await client.CreateTicketAsync(title);
                 await AssertStoredInAsync(app, title);
-                var path = DatabasePath(app);
+                string path = DatabasePath(app);
                 Assert.StartsWith(Path.GetTempPath(), path);
                 Assert.True(File.Exists(path), $"Expected the host's database at {path}.");
                 files.AddRange([path, path + "-wal", path + "-shm"]);
@@ -178,20 +178,20 @@ public class TestDatabaseCleanupTests
     [Fact]
     public async Task Host_deletes_its_database_when_it_is_disposed_asynchronously()
     {
-        var ct = TestContext.Current.CancellationToken;
-        var factory = new HostCapturingFactory();
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        HostCapturingFactory factory = new();
         try
         {
             await factory.CreateClient().CreateTicketAsync("written");
-            var path = DatabasePath(factory);
+            string path = DatabasePath(factory);
             Assert.True(File.Exists(path), $"Expected the host's database at {path}."); // not vacuous
 
-            var host = Assert.IsType<IAsyncDisposable>(factory.Host, exactMatch: false);
+            IAsyncDisposable host = Assert.IsType<IAsyncDisposable>(factory.Host, exactMatch: false);
             await factory.Host.StopAsync(ct);
             await host.DisposeAsync();
 
             // The factory is still alive, so its fallback has not run: the host deleted its own files.
-            foreach (var file in new[] { path, path + "-wal", path + "-shm" })
+            foreach (string file in new[] { path, path + "-wal", path + "-shm" })
             {
                 Assert.False(File.Exists(file), $"{file} was not deleted when its host was disposed asynchronously.");
             }
@@ -206,13 +206,13 @@ public class TestDatabaseCleanupTests
     [Fact]
     public async Task Fixed_database_is_not_deleted_by_a_derived_host_or_its_root()
     {
-        var path = TicketsApiFactory.NewDatabasePath();
+        string path = TicketsApiFactory.NewDatabasePath();
         try
         {
-            var root = new FixedDatabaseFactory(path);
+            FixedDatabaseFactory root = new(path);
             try
             {
-                var derived = root.WithWebHostBuilder(_ => { });
+                WebApplicationFactory<Program> derived = root.WithWebHostBuilder(_ => { });
                 try
                 {
                     await derived.CreateClient().CreateTicketAsync("in the fixed file");
@@ -247,21 +247,21 @@ public class TestDatabaseCleanupTests
     private static HttpClient CreateKestrelClient(WebApplicationFactory<Program> app)
     {
         app.StartServer();
-        var address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()?.Addresses;
+        ICollection<string>? address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()?.Addresses;
         return app.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri(Assert.Single(address ?? [])) });
     }
 
     // The ticket was written to this host's own database file, so the client's requests reached this host.
     private static async Task AssertStoredInAsync(WebApplicationFactory<Program> app, string title)
     {
-        var ct = TestContext.Current.CancellationToken;
-        var builder = new SqliteConnectionStringBuilder(app.Services.GetRequiredService<TicketsConnectionString>().Value)
+        CancellationToken ct = TestContext.Current.CancellationToken;
+        SqliteConnectionStringBuilder builder = new(app.Services.GetRequiredService<TicketsConnectionString>().Value)
         {
             Pooling = false,
         };
-        await using var connection = new SqliteConnection(builder.ConnectionString);
+        await using SqliteConnection connection = new(builder.ConnectionString);
         await connection.OpenAsync(ct);
-        await using var command = connection.CreateCommand();
+        await using SqliteCommand command = connection.CreateCommand();
         command.CommandText = "SELECT COUNT(*) FROM Tickets WHERE Title = $title";
         command.Parameters.AddWithValue("$title", title);
         Assert.Equal(1L, await command.ExecuteScalarAsync(ct));
@@ -270,13 +270,13 @@ public class TestDatabaseCleanupTests
     // The host is served by Kestrel (not the in-memory TestServer), and the client talks to it on its real OS port.
     private static void AssertRunsOnKestrel(WebApplicationFactory<Program> app, HttpClient client)
     {
-        var server = app.Services.GetRequiredService<IServer>();
+        IServer server = app.Services.GetRequiredService<IServer>();
         Assert.IsNotType<TestServer>(server);
         Assert.StartsWith("Kestrel", server.GetType().Name);
 
-        var port = client.BaseAddress!.Port;
+        int port = client.BaseAddress!.Port;
         Assert.InRange(port, 1, 65535);
-        var addresses = server.Features.Get<IServerAddressesFeature>()?.Addresses ?? [];
+        ICollection<string> addresses = server.Features.Get<IServerAddressesFeature>()?.Addresses ?? [];
         Assert.Contains(addresses, address => new Uri(address).Port == port);
     }
 

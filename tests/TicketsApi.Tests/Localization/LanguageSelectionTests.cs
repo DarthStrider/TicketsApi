@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
@@ -62,7 +63,7 @@ public class LanguageSelectionTests(TicketsApiFactory factory)
     [InlineData("de, es, it, fr")]
     public async Task Unsupported_or_malformed_header_does_not_change_a_successful_status(string header)
     {
-        var response = await _client.SendAsync(HttpMethod.Get, "/tickets", header);
+        HttpResponseMessage response = await _client.SendAsync(HttpMethod.Get, "/tickets", header);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(["en"], response.Content.Headers.ContentLanguage);
@@ -79,15 +80,15 @@ public class LanguageSelectionTests(TicketsApiFactory factory)
     public async Task Header_selects_only_the_message_language_not_the_formatting_culture(
         string? header, string expectedUiCulture)
     {
-        var store = new CultureRecordingStore();
-        using var app = factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+        CultureRecordingStore store = new();
+        using WebApplicationFactory<Program> app = factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
         {
             services.RemoveAll<ITicketStore>();
             services.AddSingleton<ITicketStore>(store);
         }));
-        var client = app.CreateClient();
+        HttpClient client = app.CreateClient();
 
-        var response = await client.SendAsync(HttpMethod.Get, $"/tickets/{Guid.NewGuid()}", header);
+        HttpResponseMessage response = await client.SendAsync(HttpMethod.Get, $"/tickets/{Guid.NewGuid()}", header);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal("en", store.Culture);
@@ -100,7 +101,7 @@ public class LanguageSelectionTests(TicketsApiFactory factory)
     [InlineData("/tickets?culture=fr&ui-culture=fr")]
     public async Task Query_string_does_not_select_the_language(string url)
     {
-        var response = await _client.SendAsync(HttpMethod.Post, url, json: """{ "title": "" }""");
+        HttpResponseMessage response = await _client.SendAsync(HttpMethod.Post, url, json: """{ "title": "" }""");
 
         await AssertTitleMessageAsync(response, "en");
     }
@@ -108,13 +109,13 @@ public class LanguageSelectionTests(TicketsApiFactory factory)
     [Fact]
     public async Task Culture_cookie_does_not_select_the_language()
     {
-        var request = new HttpRequestMessage(HttpMethod.Post, "/tickets")
+        HttpRequestMessage request = new(HttpMethod.Post, "/tickets")
         {
             Content = new StringContent("""{ "title": "" }""", System.Text.Encoding.UTF8, "application/json"),
         };
         request.Headers.TryAddWithoutValidation("Cookie", ".AspNetCore.Culture=c%3Dfr%7Cuic%3Dfr");
 
-        var response = await _client.SendAsync(request, TestContext.Current.CancellationToken);
+        HttpResponseMessage response = await _client.SendAsync(request, TestContext.Current.CancellationToken);
 
         await AssertTitleMessageAsync(response, "en");
     }
@@ -127,9 +128,9 @@ public class LanguageSelectionTests(TicketsApiFactory factory)
     [InlineData("fr-CA", "fr", false)]
     public async Task Responses_have_content_language_and_vary(string? header, string expected, bool success)
     {
-        var json = success ? """{ "title": "ok" }""" : """{ "title": "" }""";
+        string json = success ? """{ "title": "ok" }""" : """{ "title": "" }""";
 
-        var response = await _client.SendAsync(HttpMethod.Post, "/tickets", header, json);
+        HttpResponseMessage response = await _client.SendAsync(HttpMethod.Post, "/tickets", header, json);
 
         Assert.Equal(success ? HttpStatusCode.Created : HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal([expected], response.Content.Headers.ContentLanguage);
@@ -140,7 +141,7 @@ public class LanguageSelectionTests(TicketsApiFactory factory)
 
     private async Task AssertLanguageAsync(string? header, string expected)
     {
-        var response = await _client.SendAsync(HttpMethod.Post, "/tickets", header, """{ "title": "" }""");
+        HttpResponseMessage response = await _client.SendAsync(HttpMethod.Post, "/tickets", header, """{ "title": "" }""");
 
         await AssertTitleMessageAsync(response, expected);
     }
@@ -148,7 +149,7 @@ public class LanguageSelectionTests(TicketsApiFactory factory)
     // The status code never depends on the header (AC5), and the message is in the expected language.
     private static async Task AssertTitleMessageAsync(HttpResponseMessage response, string language)
     {
-        var body = await AssertProblemDetailsAsync(response, HttpStatusCode.BadRequest);
+        JsonElement body = await AssertProblemDetailsAsync(response, HttpStatusCode.BadRequest);
         Assert.Equal(Texts.Get("TitleRequired", language), body.GetProperty("errors").GetProperty("title")[0].GetString());
         Assert.Equal(Texts.Get("Title400Validation", language), body.GetProperty("title").GetString());
     }
