@@ -51,7 +51,7 @@ coding a ticket. The short version:
 - Write or update tests first, and confirm they fail before implementing.
 - Never weaken or delete a test to make it pass. If a test looks wrong, stop and ask.
 - Keep changes scoped to the ticket. Use one branch per ticket: `feature/T-00X-short-name`.
-- Ticket flow: `/start-ticket T-00X` -> work -> `/create-pr` (opens a pull request) -> the user merges it on GitHub -> `/finish-ticket` (switch to main, pull, delete the branch).
+- Ticket flow: `/start-ticket T-00X` -> work -> `/create-pr` (reviews, lessons and code guide on the branch, then opens a pull request) -> the user merges it on GitHub -> `/finish-ticket` (switch to main, pull, delete the branch).
 - Never merge pull requests. The user reviews and merges them on GitHub.
 
 ## Team roles (subagents in .claude/agents)
@@ -61,7 +61,8 @@ coding a ticket. The short version:
 - **code-reviewer** and **security-auditor:** read-only reviews.
 - **database-engineer:** checks database correctness (migrations and schema, query translation, concurrency and data integrity, test database isolation) on any ticket touching EF Core or the schema. Writes tests only in `tests/TicketsApi.Tests/Data/`; QA still gives the final PASS/FAIL.
 - **devops-engineer:** read-only owner of CI and build health. Triages CI failures (real or flaky), checks local and CI parity and pipeline parity, and checks a PR's CI before merge. Proposes changes; never edits files, reruns, pushes or merges.
-- **teacher:** owns `docs/learning/`. Records lessons for the user after each ticket, or when the user says "teacher, note this".
+- **teacher:** owns `docs/learning/`. For every ticket, on the ticket branch before its pull request, it records lessons and
+  updates `CodeGuide.md` (every class and function in `src/`). It also records a lesson when the user says "teacher, note this".
 - The user is the product owner and makes every product decision. Agents propose, the user decides.
 
 ## Change requests

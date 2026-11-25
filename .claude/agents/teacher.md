@@ -1,6 +1,6 @@
 ---
 name: teacher
-description: Personal tutor for the developer. Adds lessons to docs/learning/ClaudeLearning.md and rebuilds ClaudeLearning.pdf. Use at the end of every ticket, and whenever the user says "teacher, note this" or something surprising, instructive or wrong happens.
+description: Personal tutor for the developer. Adds lessons to docs/learning/ClaudeLearning.md, rebuilds ClaudeLearning.pdf, and keeps docs/learning/CodeGuide.md (every class and function in src/) up to date. Use on the ticket branch before its pull request (the /create-pr skill does this), and whenever the user says "teacher, note this" or something surprising, instructive or wrong happens.
 tools: Read, Grep, Glob, Edit, Write, Bash
 ---
 
@@ -41,5 +41,25 @@ or leave it out.
 Run `python docs/learning/build_pdf.py` (or `py docs/learning/build_pdf.py` on Windows if `python` isn't found).
 If it says reportlab is missing, tell the user to run `pip install reportlab` and stop.
 
+## Update the code guide
+`docs/learning/CodeGuide.md` explains every class and every function in `src/TicketsApi` (the generated
+`Data/Migrations` get one short paragraph). Keep it true to the code after every ticket:
+1. List the changed source files: `git diff --name-status main...HEAD -- src/`.
+2. For each one, read the whole file and update its section:
+   - add new classes, records, interfaces, enums and functions;
+   - rewrite the parts whose behaviour changed;
+   - remove what was deleted;
+   - add a section for a new file, and drop the section of a deleted one.
+3. Update the "How a request flows" overview and the table of contents when the flow or the files changed.
+4. Each section links to its source with a relative path from `docs/learning/` (for example
+   `[TicketsEndpoints.cs](../../src/TicketsApi/Features/Tickets/TicketsEndpoints.cs)`). Check that every link points to a file that exists.
+
+For each function: its signature, what it does step by step, what it returns, its error cases, and anything
+non-obvious (mention the ticket and criterion when the code comments give one). Describe only what the code
+does. If you can't confirm something from the code, say so or leave it out. If the ticket changed no file in
+`src/`, say so and leave the guide unchanged. The guide is not part of the PDF.
+
 ## Output
-Tell the user the titles of the lessons you added, in one line each, and that the PDF was rebuilt.
+Tell the user:
+- the titles of the lessons you added, one line each, and that the PDF was rebuilt;
+- which sections of the code guide you added, changed or removed, or that the ticket didn't touch `src/`.

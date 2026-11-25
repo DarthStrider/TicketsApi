@@ -14,7 +14,10 @@ Finish the ticket after the user merged its pull request on GitHub.
      stop and tell the user. **Never use `git branch -D`.**
    - If `origin/<branch>` still exists, ask before running `git push origin --delete <branch>`.
 4. Run `git fetch --prune`, then `dotnet build` and `dotnet test` on main, and show the results.
-5. Ask the `teacher` subagent to add this ticket's lessons to `docs/learning/ClaudeLearning.md` and rebuild the PDF.
-   Then commit only `docs/learning/` on main with the message `Learning notes for <ticket>` and ask before pushing.
-6. Summarize: main is at <commit>, the branch is deleted, the tests are green, and the lessons added.
+5. Check that the lessons and the code guide arrived with the merge: `git log -1 --format=%s -- docs/learning/` on main
+   should show `<ticket>: Learning notes and code guide` (from `/create-pr`). **Never commit on main**: it is protected.
+   If they are missing, tell the user. If they want them, create a branch `docs/<ticket>-learning-notes`, ask the
+   `teacher` subagent for the lessons and the code guide update, commit only `docs/learning/`, and ask before pushing
+   and opening a pull request.
+6. Summarize: main is at <commit>, the branch is deleted, the tests are green, and the lessons and code guide are in.
    Suggest `/start-ticket` for the next ticket.
