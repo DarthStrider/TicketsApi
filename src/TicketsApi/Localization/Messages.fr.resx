@@ -40,6 +40,12 @@
   <data name="Title400" xml:space="preserve">
     <value>Requête incorrecte</value>
   </data>
+  <data name="Title401" xml:space="preserve">
+    <value>Authentification requise</value>
+  </data>
+  <data name="Title403" xml:space="preserve">
+    <value>Accès refusé</value>
+  </data>
   <data name="Title404" xml:space="preserve">
     <value>Ressource introuvable</value>
   </data>

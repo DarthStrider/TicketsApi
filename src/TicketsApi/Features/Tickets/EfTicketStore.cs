@@ -26,12 +26,18 @@ internal sealed class EfTicketStore(TicketsDbContext db, TicketStoreTestHooks te
         db.Tickets.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id, cancellationToken);
 
     // Filtered and sorted by the database (T-005 criterion 5): newest first, then id descending for ties.
-    public async Task<IReadOnlyList<Ticket>> ListAsync(TicketStatus? status, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<Ticket>> ListAsync(
+        TicketStatus? status, string? createdBy, CancellationToken cancellationToken)
     {
         IQueryable<Ticket> query = db.Tickets.AsNoTracking();
         if (status is { } filter)
         {
             query = query.Where(t => t.Status == filter);
+        }
+
+        if (createdBy is not null)
+        {
+            query = query.Where(t => t.CreatedBy == createdBy);
         }
 
         return await query
@@ -83,6 +89,7 @@ internal sealed class EfTicketStore(TicketsDbContext db, TicketStoreTestHooks te
             Description = current.Ticket.Description,
             Status = next,
             CreatedAt = current.Ticket.CreatedAt,
+            CreatedBy = current.Ticket.CreatedBy,
         };
     }
 }

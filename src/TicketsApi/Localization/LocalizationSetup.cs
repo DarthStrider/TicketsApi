@@ -43,6 +43,8 @@ public static class LocalizationSetup
                 StatusCodes.Status400BadRequest => context.ProblemDetails is HttpValidationProblemDetails
                     ? "Title400Validation"
                     : "Title400",
+                StatusCodes.Status401Unauthorized => "Title401", // T-006 criterion 27
+                StatusCodes.Status403Forbidden => "Title403",
                 StatusCodes.Status404NotFound => "Title404",
                 StatusCodes.Status405MethodNotAllowed => "Title405",
                 StatusCodes.Status409Conflict => "Title409",

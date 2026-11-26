@@ -12,34 +12,46 @@ HTTP request
        2. Content-Language/Vary  (added to every response when it starts)
        3. exception handler      (turns an unhandled exception into a ProblemDetails response)
        4. status code pages      (turns an empty 4xx/5xx response into a ProblemDetails response)
+       5. authentication         (reads the Authorization: Bearer token and validates the JWT)
+       6. authorization          (fallback policy: a signed-in user is required unless the endpoint
+                                  is AllowAnonymous; PATCH also needs the Agent policy)
   -> routing picks an endpoint (/health or /tickets/...)
-  -> endpoint handler in TicketsEndpoints  (validates input, applies the rules)
+  -> endpoint handler in TicketsEndpoints  (validates input, checks read access with ITicketAccess,
+                                            applies the rules)
   -> ITicketStore, implemented by EfTicketStore  (one per request)
   -> TicketsDbContext  (EF Core, one per request)
   -> SQLite file (App_Data/tickets.dev.db in Development)
 ```
 
-Before the app accepts any request, `Program.cs` calls `InitializeTicketsDatabaseAsync`, which checks the connection string and the database schema. If that fails, the app doesn't start.
+Before the app accepts any request, `Program.cs` calls `ValidateAuthSettings` (outside Development the identity provider's authority and audience must be configured) and `InitializeTicketsDatabaseAsync`, which checks the connection string and the database schema. If either fails, the app doesn't start.
+
+**Authentication and authorization (T-006).** They run after the error handlers, so a 401 or 403 they produce is turned into a localized `ProblemDetails` like every other error. The **fallback policy** applies to every request whose endpoint doesn't set its own authorization, including requests that match no route, so without a token even `/nothing` or `/tickets/abc` gets 401, not 404 (criterion 1). Only `/health` and, in Development, the OpenAPI document opt out with `AllowAnonymous()`. A caller who isn't an agent sees only the tickets they created; someone else's ticket gives the same 404 as an unknown id.
 
 The response goes back out through the same middleware in reverse. Every error, whichever layer produces it, ends up as a `ProblemDetails` JSON body (RFC 9457) with a title in the request's language.
 
 ## Contents
 
 1. [Program.cs](#programcs): startup, services and middleware
-2. [Features/Tickets/TicketsEndpoints.cs](#featuresticketsticketsendpointscs): the HTTP endpoints
-3. [Features/Tickets/Ticket.cs](#featuresticketsticketcs): `TicketStatus` and `Ticket`
-4. [Features/Tickets/TicketContracts.cs](#featuresticketsticketcontractscs): request and response records
-5. [Features/Tickets/TicketTransitions.cs](#featuresticketstickettransitionscs): allowed status changes
-6. [Features/Tickets/ITicketStore.cs](#featuresticketsiticketstorecs): the storage interface
-7. [Features/Tickets/EfTicketStore.cs](#featuresticketsefticketstorecs): the EF Core implementation
-8. [Features/Tickets/TicketStoreTestHooks.cs](#featuresticketsticketstoretesthookscs): a test-only seam
-9. [Data/TicketsDbContext.cs](#dataticketsdbcontextcs): the EF Core model
-10. [Data/TicketsDatabase.cs](#dataticketsdatabasecs): connection string and startup checks
-11. [Data/DesignTimeTicketsDbContextFactory.cs](#datadesigntimeticketsdbcontextfactorycs): for `dotnet ef`
-12. [Data/Migrations](#datamigrations): generated schema history
-13. [Localization/LocalizationSetup.cs](#localizationlocalizationsetupcs): English and French
-14. [Localization/Messages.cs](#localizationmessagescs): the resource marker
-15. [appsettings.json and appsettings.Development.json](#appsettingsjson-and-appsettingsdevelopmentjson): configuration
+2. [Auth/AuthSetup.cs](#authauthsetupcs): JWT bearer authentication, the fallback and Agent policies
+3. [Auth/AgentAuthorizationHandler.cs](#authagentauthorizationhandlercs): the Agent policy's requirement and handler
+4. [Auth/ClaimsPrincipalExtensions.cs](#authclaimsprincipalextensionscs): the caller's `sub`
+5. [Features/Tickets/TicketsEndpoints.cs](#featuresticketsticketsendpointscs): the HTTP endpoints
+6. [Features/Tickets/ITicketAccess.cs](#featuresticketsiticketaccesscs): who may do what with tickets
+7. [Features/Tickets/TicketAccess.cs](#featuresticketsticketaccesscs): the implementation of the access rules
+8. [Features/Tickets/Ticket.cs](#featuresticketsticketcs): `TicketStatus` and `Ticket`
+9. [Features/Tickets/TicketContracts.cs](#featuresticketsticketcontractscs): request and response records
+10. [Features/Tickets/TicketTransitions.cs](#featuresticketstickettransitionscs): allowed status changes
+11. [Features/Tickets/ITicketStore.cs](#featuresticketsiticketstorecs): the storage interface
+12. [Features/Tickets/EfTicketStore.cs](#featuresticketsefticketstorecs): the EF Core implementation
+13. [Features/Tickets/TicketStoreTestHooks.cs](#featuresticketsticketstoretesthookscs): a test-only seam
+14. [Data/TicketsDbContext.cs](#dataticketsdbcontextcs): the EF Core model
+15. [Data/TicketsDatabase.cs](#dataticketsdatabasecs): connection string and startup checks
+16. [Data/DesignTimeTicketsDbContextFactory.cs](#datadesigntimeticketsdbcontextfactorycs): for `dotnet ef`
+17. [Data/Migrations](#datamigrations): generated schema history
+18. [Localization/LocalizationSetup.cs](#localizationlocalizationsetupcs): English and French
+19. [Localization/Messages.cs](#localizationmessagescs): the resource marker
+20. [TicketsApi.csproj](#ticketsapicsproj): packages and the user-secrets id
+21. [appsettings.json and appsettings.Development.json](#appsettingsjson-and-appsettingsdevelopmentjson): configuration
 
 ---
 
@@ -47,9 +59,9 @@ The response goes back out through the same middleware in reverse. Every error, 
 
 Source: [Program.cs](../../src/TicketsApi/Program.cs)
 
-The entry point. It uses **top-level statements**: there is no `Main` method written out; the compiler generates one from the statements in this file. It does three things in order: register services, build the app and check the database, then set up the middleware pipeline and endpoints.
+The entry point. It uses **top-level statements**: there is no `Main` method written out; the compiler generates one from the statements in this file. It does three things in order: register services, build the app and check the auth settings and the database, then set up the middleware pipeline and endpoints.
 
-### Service registration (lines 5 to 13)
+### Service registration (lines 6 to 15)
 
 ```csharp
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
@@ -65,25 +77,31 @@ WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 | `AddSingleton<TicketStoreTestHooks>()` | the test hook holder | singleton, so a test sets it once and every request sees it |
 | `AddTicketsDatabase()` | the connection string and `TicketsDbContext` | see [TicketsDatabase.cs](#dataticketsdatabasecs) |
 | `AddScoped<ITicketStore, EfTicketStore>()` | the ticket store | scoped (one per request), because it uses the scoped `DbContext` |
+| `AddTicketsAuth()` | JWT bearer authentication, the fallback and `Agent` authorization policies, and `ITicketAccess` | see [AuthSetup.cs](#authauthsetupcs) (T-006) |
 
 A **lifetime** says how often DI creates a new instance: singleton = once per app, scoped = once per request, transient = every time it's asked for.
 
-### Build and database check (lines 15 to 18)
+### Build and startup checks (lines 17 to 23)
 
 ```csharp
 WebApplication app = builder.Build();
+app.ValidateAuthSettings();
 await app.InitializeTicketsDatabaseAsync();
 ```
 
-`Build()` locks the service list and creates the app. `InitializeTicketsDatabaseAsync` runs once, before the app listens. It fails fast if the connection string is missing, applies migrations in Development, and refuses to start in any other environment if migrations are pending. Details in [TicketsDatabase.cs](#dataticketsdatabasecs).
+`Build()` locks the service list and creates the app. Then two fail-fast checks run once, before the app listens:
 
-### Middleware pipeline (lines 20 to 31)
+- `ValidateAuthSettings` (T-006 criterion 8): outside Development, throws if the identity provider's authority or audience isn't configured, so the API never starts with authentication that can't work. Details in [AuthSetup.cs](#authauthsetupcs).
+- `InitializeTicketsDatabaseAsync` fails fast if the connection string is missing, applies migrations in Development, and refuses to start in any other environment if migrations are pending. Details in [TicketsDatabase.cs](#dataticketsdatabasecs).
+
+### Middleware pipeline (lines 25 to 40)
 
 Middleware runs in the order it is added, so order matters here.
 
 1. `app.UseTicketsLocalization()` comes **first**, so that everything after it, including the error handlers' `ProblemDetails`, is produced in the request's language.
 2. `app.UseExceptionHandler(...)` catches any unhandled exception thrown later in the pipeline and writes a `ProblemDetails` response. No exception message or stack trace is sent to the client.
-3. `app.UseStatusCodePages()` gives a body to error responses that have none (for example the empty 404 from `TypedResults.NotFound()`, or a 404 for a URL no route matches). Because `AddProblemDetails` is registered, that body is `ProblemDetails`.
+3. `app.UseStatusCodePages()` gives a body to error responses that have none (for example the empty 404 from `TypedResults.NotFound()`, or the empty 401 and 403 from authentication and authorization). Because `AddProblemDetails` is registered, that body is `ProblemDetails`.
+4. `app.UseTicketsAuth()` adds authentication, then authorization (T-006). It comes **after** the error handlers, so a 401 or 403 passes back out through them and becomes a localized `ProblemDetails` with `Content-Language` (criteria 26 and 27). Details in [AuthSetup.cs](#authauthsetupcs).
 
 **The exception handler's status selector** is the non-obvious part:
 
@@ -95,16 +113,130 @@ StatusCodeSelector = ex => ex is BadHttpRequestException bad
 
 By default the exception handler answers every exception with 500. But some exceptions are the client's fault, not the server's: a body over the 32 KB cap throws a `BadHttpRequestException` with status 413 while the body is read. The selector keeps that exception's own status (413, or a 400 for a bad body), and only real server failures become 500.
 
-### Endpoints and run (lines 33 to 41)
+### Endpoints and run (lines 42 to 50)
 
-- `app.MapOpenApi()` only in Development: serves the OpenAPI JSON document describing the API. Not exposed in production.
-- `app.MapGet("/health", () => Results.Ok(new { status = "ok" }))` is a lambda endpoint that always returns `200 {"status":"ok"}`. It doesn't touch the database. Useful for a load balancer or a quick "is it running" check.
+- `app.MapOpenApi().AllowAnonymous()` only in Development: serves the OpenAPI JSON document describing the API, without a token. Not mapped in other environments, so there it gets 401 like any unknown path (T-006 criterion 5).
+- `app.MapGet("/health", () => Results.Ok(new { status = "ok" })).AllowAnonymous()` is a lambda endpoint that always returns `200 {"status":"ok"}`, with or without a token. It doesn't touch the database. Useful for a load balancer or a quick "is it running" check.
+- `AllowAnonymous()` is the opt-out from the fallback policy. These two are the only endpoints that use it (criterion 5).
 - `app.MapTicketsEndpoints()` adds the `/tickets` routes from [TicketsEndpoints.cs](#featuresticketsticketsendpointscs).
 - `app.Run()` starts Kestrel and blocks until the app shuts down.
 
 ### `public partial class Program { }`
 
 With top-level statements the compiler generates a `Program` class that is not public. The integration tests use `WebApplicationFactory<Program>`, which needs to see it. This empty `partial` declaration merges with the generated class and makes it public. It adds no code.
+
+---
+
+## Auth/AuthSetup.cs
+
+Source: [AuthSetup.cs](../../src/TicketsApi/Auth/AuthSetup.cs)
+
+### `internal static class AuthSetup`
+
+Authentication and authorization for the whole API (T-006). The API doesn't issue tokens; it accepts **JWT bearer tokens** from an OpenID Connect identity provider (Auth0, Okta or Keycloak are candidates; none is chosen). In Development the tokens come from `dotnet user-jwts` (criterion 7).
+
+Two words that are easy to mix up:
+
+- **Authentication** answers "who are you?": it reads the `Authorization: Bearer <token>` header, checks the token, and builds a `ClaimsPrincipal` (the user and their claims). Failure means **401**.
+- **Authorization** answers "may you do this?": it checks policies against that user. Failure means **403** (or 401 if nobody is signed in).
+
+**Constants**
+
+| Constant | Value | Used for |
+|---|---|---|
+| `AgentPolicy` | `"Agent"` | the policy name on PATCH `/tickets/{id}/status` |
+| `AuthorityKey` | `"Authentication:Schemes:Bearer:Authority"` | the provider's URL (its discovery document lives under it) |
+| `AudienceKey` | `"Authentication:Schemes:Bearer:Audience"` | the audience the token must be issued for |
+| `RoleClaimKey` | `"Authentication:RoleClaim"` | the name of the claim that holds roles |
+| `DefaultRoleClaim` | `"role"` | used when `RoleClaimKey` isn't set; what `dotnet user-jwts` emits |
+| `AsymmetricAlgorithms` (private) | RS256/384/512, PS256/384/512, ES256/384/512 | the only signing algorithms accepted outside Development |
+
+All settings come from configuration, never from code (criteria 6 and 10). Outside Development they are set by environment variables, for example `Authentication__Schemes__Bearer__Authority`.
+
+### `RoleClaim(IConfiguration configuration)`
+
+```csharp
+public static string RoleClaim(IConfiguration configuration)
+```
+
+Returns the configured `Authentication:RoleClaim` if it is non-empty, otherwise `"role"`. The name is used exactly as configured, so a namespaced name such as Auth0's `https://<namespace>/roles` works (criterion 10). Called by [TicketAccess.IsAgent](#featuresticketsticketaccesscs).
+
+### `AddTicketsAuth(this IServiceCollection services)`
+
+Registers everything; called from `Program.cs`. Returns `services`.
+
+1. **Authentication.** `AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer()` registers the JWT bearer scheme ("Bearer") as the default. `AddJwtBearer()` with no arguments also **binds configuration** from `Authentication:Schemes:Bearer` automatically: `Authority`, `ValidIssuer(s)`, `ValidAudience(s)`, `RequireHttpsMetadata`, and the signing keys `dotnet user-jwts` writes, among others. The comment notes it does **not** read `Audience`, which is why the next step does.
+2. **Options configured from configuration.** `AddOptions<JwtBearerOptions>("Bearer").Configure<IConfiguration, IHostEnvironment>(...)` runs when the options are first used, not while `Program.cs` builds services, so environment variables and test hosts' settings always apply. It runs after the automatic binding above, so it has the last word. Step by step:
+   - sets `Authority` from `AuthorityKey` and `Audience` from `AudienceKey`, if they are non-empty;
+   - `MapInboundClaims = false`: keeps the token's own claim names. Without it, the handler renames some JWT claims to long .NET claim types (for example `sub` to a `nameidentifier` URI). With it, `sub` stays `sub` and the role claim keeps its configured name (criteria 4 and 10);
+   - `NameClaimType = "sub"`, so `User.Identity.Name` is the subject;
+   - sets `ValidateIssuer`, `ValidateAudience`, `ValidateLifetime`, `ValidateIssuerSigningKey` and `RequireSignedTokens` to `true` (criterion 9). They are written out so no configuration binding or later package version can turn them off; the Production "wrong issuer" and "wrong audience" tests pin the behaviour. Clock skew stays at the default 5 minutes;
+   - **outside Development only** (criteria 6 and 9, from the security audit):
+     - `RequireHttpsMetadata = true`, so the provider's metadata is only fetched over HTTPS, even if configuration says otherwise;
+     - `ValidAlgorithms = AsymmetricAlgorithms`, so a symmetric (HS*) token is rejected. This is what stops a `dotnet user-jwts` key put into Production configuration, because that binding only produces symmetric keys, and a symmetric key would let anyone holding it mint tokens. EdDSA isn't in the list;
+     - `IssuerSigningKey` and `IssuerSigningKeys` set to `null`, so signing keys come only from the provider's discovery document. Today this is a backstop behind the algorithm list, in case a later version binds asymmetric keys from configuration.
+
+     Development keeps the `dotnet user-jwts` keys;
+   - `IncludeErrorDetails = false`: the `WWW-Authenticate` header of a 401 never has an `error_description` explaining why the token was rejected (criteria 26 and 28);
+   - `Events.OnTokenValidated`: after the token passes validation, if it has no `sub` claim or an empty one, `context.Fail(...)` rejects it, so the request gets 401 (criterion 4).
+3. **Authorization.** `AddAuthorizationBuilder()`:
+   - `SetFallbackPolicy(... RequireAuthenticatedUser() ...)`: every endpoint that doesn't set its own authorization requires a signed-in user, including requests that match no route, so an anonymous caller can't learn which routes exist (criterion 1). Endpoints opt out with `AllowAnonymous()`;
+   - `AddPolicy("Agent", ...)`: a signed-in user plus an `AgentRequirement`, decided by [AgentAuthorizationHandler](#authagentauthorizationhandlercs) (criterion 20).
+4. Registers `AgentAuthorizationHandler` as an `IAuthorizationHandler` and `TicketAccess` as `ITicketAccess`, both singletons (neither holds per-request state).
+
+### `ValidateAuthSettings(this WebApplication app)`
+
+```csharp
+public static void ValidateAuthSettings(this WebApplication app)
+```
+
+Called from `Program.cs` right after `Build()` (criterion 8).
+
+1. In Development, returns at once: `dotnet user-jwts` needs neither setting.
+2. Otherwise, for `AuthorityKey` and then `AudienceKey`: if the value is missing or blank, throws `InvalidOperationException` naming the key and the matching environment variable (`:` replaced by `__`). The app fails to start.
+3. Builds the `JwtBearerOptions` now, through `IOptionsMonitor<JwtBearerOptions>.Get("Bearer")`, and discards the result (`_ =`). That runs the configuration above at startup, so any other invalid setting fails here instead of on the first request; the comment's example is an `http://` authority, which `RequireHttpsMetadata` rejects (criterion 9).
+
+Returns nothing.
+
+### `UseTicketsAuth(this WebApplication app)`
+
+Adds `UseAuthentication()` then `UseAuthorization()` to the pipeline and returns `app`. `Program.cs` calls it after the exception handler and status code pages, so a 401 or 403 becomes localized `ProblemDetails` with `Content-Language` (criteria 26 and 27).
+
+---
+
+## Auth/AgentAuthorizationHandler.cs
+
+Source: [AgentAuthorizationHandler.cs](../../src/TicketsApi/Auth/AgentAuthorizationHandler.cs)
+
+### `internal sealed class AgentRequirement : IAuthorizationRequirement`
+
+An empty marker class: the `Agent` policy's requirement, "the caller must be an agent" (criterion 20). In ASP.NET Core authorization, a **requirement** says what must be true and a **handler** decides whether it is. The class has no body (`;` instead of `{ }`).
+
+### `internal sealed class AgentAuthorizationHandler(ITicketAccess access) : AuthorizationHandler<AgentRequirement>`
+
+The handler for `AgentRequirement`. It gets `ITicketAccess` through its primary constructor, so "who is an agent" has a single owner, and a test host that replaces `ITicketAccess` also changes who passes the policy (criterion 21).
+
+### `HandleRequirementAsync(AuthorizationHandlerContext context, AgentRequirement requirement)`
+
+If `access.IsAgent(context.User)` is true, calls `context.Succeed(requirement)`. Otherwise it does nothing, which leaves the requirement unmet, so authorization fails: 403 for a signed-in caller. Returns `Task.CompletedTask` (the check is synchronous).
+
+---
+
+## Auth/ClaimsPrincipalExtensions.cs
+
+Source: [ClaimsPrincipalExtensions.cs](../../src/TicketsApi/Auth/ClaimsPrincipalExtensions.cs)
+
+### `internal static class ClaimsPrincipalExtensions`
+
+`SubjectClaim = "sub"`: the claim that identifies a user (criterion 4). Because `MapInboundClaims` is off, it keeps its JWT name.
+
+### `Subject(this ClaimsPrincipal user)`
+
+```csharp
+public static string Subject(this ClaimsPrincipal user)
+```
+
+Returns the caller's `sub` value. If it is missing or empty, throws `InvalidOperationException`. That should never happen: a token without a `sub` is already rejected during validation (`OnTokenValidated` in `AuthSetup`), so reaching the throw means a bug, not bad client input; it would become a 500 through the exception handler. Used by `CreateTicketAsync` (to store the creator) and by `TicketAccess`.
 
 ---
 
@@ -115,6 +247,8 @@ Source: [TicketsEndpoints.cs](../../src/TicketsApi/Features/Tickets/TicketsEndpo
 ### `public static class TicketsEndpoints`
 
 All `/tickets` endpoints and their input validation. It is a static class of **Minimal API** handlers: plain methods whose parameters ASP.NET Core fills in from the route, query string, body and DI container. It's the "validate at the boundary" layer from `CLAUDE.md`: nothing reaches the store until the input has been checked.
+
+Since T-006, handlers also take a `ClaimsPrincipal user` parameter. Minimal APIs fill it with `HttpContext.User`, the user that authentication built from the token. Every endpoint here is protected by the fallback policy, so `user` is always signed in when a handler runs.
 
 **Constants**
 
@@ -141,24 +275,27 @@ An extension method, called from `Program.cs` as `app.MapTicketsEndpoints()`.
 | `POST /tickets` | `CreateTicketAsync` | 32 KB body cap |
 | `GET /tickets/{id:guid}` | `GetTicketAsync` | `:guid` constraint |
 | `GET /tickets` | `ListTicketsAsync` | optional `?status=` |
-| `PATCH /tickets/{id:guid}/status` | `ChangeStatusAsync` | 32 KB body cap |
+| `PATCH /tickets/{id}/status` | `ChangeStatusAsync` | `RequireAuthorization("Agent")`, 32 KB body cap, no `:guid` constraint |
 
 3. Returns `app`, so calls can be chained.
 
+Every route also needs a signed-in user, through the fallback policy in [AuthSetup.cs](#authauthsetupcs); none of them opts out.
+
 Non-obvious points:
 
-- **`{id:guid}`** is a route constraint. A URL like `/tickets/abc` doesn't match the route at all, so the client gets a 404 rather than a 400 (T-002 criterion 3).
+- **`{id:guid}`** is a route constraint. A URL like `/tickets/abc` doesn't match the route at all. With a token, the client gets a 404 rather than a 400 (T-002 criterion 3); without one, the fallback policy answers 401 first (T-006 criterion 1).
+- **PATCH has no `:guid` constraint** (T-006 criteria 20 and 22). The `Agent` policy only runs on a matched endpoint. With the constraint, a non-agent sending `/tickets/abc/status` would match nothing and get 404 instead of the required 403. So the route accepts any `{id}` as a string, the policy runs, and the handler parses the id itself.
 - **`.WithMetadata(new RequestSizeLimitAttribute(MaxRequestBodyBytes))`** attaches the body cap to that endpoint. The server enforces it while the body is read: reading past 32 KB throws a `BadHttpRequestException` with status 413, which the exception handler's status selector in `Program.cs` keeps as 413.
 
 ### `CreateTicketAsync` (POST /tickets)
 
 ```csharp
 private static async Task<Results<Created<TicketResponse>, ValidationProblem>> CreateTicketAsync(
-    CreateTicketRequest request, ITicketStore store, IStringLocalizer<Messages> localizer,
-    TimeProvider timeProvider, CancellationToken cancellationToken)
+    CreateTicketRequest request, ClaimsPrincipal user, ITicketStore store,
+    IStringLocalizer<Messages> localizer, TimeProvider timeProvider, CancellationToken cancellationToken)
 ```
 
-Parameters: `request` is bound from the JSON body; `store`, `localizer` and `timeProvider` come from DI; `cancellationToken` is cancelled if the client disconnects. Reading and parsing the JSON body into `CreateTicketRequest` is done by the framework before this method runs.
+Parameters: `request` is bound from the JSON body; `user` is the signed-in caller; `store`, `localizer` and `timeProvider` come from DI; `cancellationToken` is cancelled if the client disconnects. Reading and parsing the JSON body into `CreateTicketRequest` is done by the framework before this method runs. Any signed-in user may create a ticket, agent or not (T-006 criterion 14).
 
 Steps:
 
@@ -168,6 +305,7 @@ Steps:
    - `Id = Guid.CreateVersion7()`: a version 7 GUID, which starts with a timestamp, so ids created later are generally larger.
    - `Status = TicketStatus.Open`: every new ticket starts open.
    - `CreatedAt = timeProvider.GetUtcNow()`: always UTC, and from the injected clock so tests can control it.
+   - `CreatedBy = user.Subject()`: the caller's `sub`, which later decides who may read the ticket (T-006 criterion 14). It is not in the response.
 4. Saves it with `store.AddAsync`.
 5. Returns **201 Created** with a `Location: /tickets/{id}` header and the ticket as the body.
 
@@ -194,35 +332,35 @@ Returns `true` only if there are no errors. The error texts come from the locali
 
 ```csharp
 private static async Task<Results<Ok<TicketResponse>, NotFound>> GetTicketAsync(
-    Guid id, ITicketStore store, CancellationToken cancellationToken)
+    Guid id, ClaimsPrincipal user, ITicketStore store, ITicketAccess access, CancellationToken cancellationToken)
 ```
 
-Loads the ticket with `store.GetAsync`. Returns **200** with the ticket, or **404** if there is none. The 404 is empty here; `UseStatusCodePages` plus `AddProblemDetails` turn it into a `ProblemDetails` body on the way out.
+Loads the ticket with `store.GetAsync`. Returns **404** if there is none, or if `access.CanRead(user, ticket)` is false; otherwise **200** with the ticket. Someone else's ticket gets exactly the same 404 as an unknown id, so a caller can't find out that it exists (T-006 criterion 15). The 404 is empty here; `UseStatusCodePages` plus `AddProblemDetails` turn it into a `ProblemDetails` body on the way out.
 
 ### `ListTicketsAsync` (GET /tickets)
 
 ```csharp
 private static async Task<Results<Ok<TicketListResponse>, ValidationProblem>> ListTicketsAsync(
-    [FromQuery] string[]? status, ITicketStore store, IStringLocalizer<Messages> localizer,
-    CancellationToken cancellationToken)
+    [FromQuery] string[]? status, ClaimsPrincipal user, ITicketStore store, ITicketAccess access,
+    IStringLocalizer<Messages> localizer, CancellationToken cancellationToken)
 ```
 
 1. `status` is bound as an **array** on purpose: if it were a single `string`, a repeated `?status=Open&status=Closed` couldn't be detected (T-002 criterion 15).
-2. If no `status` is given, there is no filter.
+2. If no `status` is given, there is no status filter.
 3. If more than one value is given, or the value isn't a status name, returns **400** with `status` -> `StatusMustBeOneOf`.
-4. Otherwise calls `store.ListAsync(filter)` and returns **200** with `TicketListResponse`. `[.. tickets.Select(ToResponse)]` is a collection expression with a spread: it builds the list of responses.
+4. Otherwise calls `store.ListAsync(filter, access.ListCreatorFilter(user), ...)` and returns **200** with `TicketListResponse`. The creator filter is `null` for an agent (every ticket) and the caller's `sub` for anyone else, so a non-agent sees only the tickets they created (T-006 criterion 17). `[.. tickets.Select(ToResponse)]` is a collection expression with a spread: it builds the list of responses.
 
-The order (newest first) is applied by the store, in the database.
+The creator filter and the order (newest first) are applied by the store, in the database, not in memory.
 
 ### `ChangeStatusAsync` (PATCH /tickets/{id}/status)
 
 ```csharp
 private static async Task<Results<Ok<TicketResponse>, ValidationProblem, NotFound, ProblemHttpResult>>
-    ChangeStatusAsync(Guid id, HttpRequest request, ITicketStore store,
-        IStringLocalizer<Messages> localizer, CancellationToken cancellationToken)
+    ChangeStatusAsync(string id, HttpRequest request, ClaimsPrincipal user, ITicketStore store,
+        ITicketAccess access, IStringLocalizer<Messages> localizer, CancellationToken cancellationToken)
 ```
 
-The most involved method. T-003 criterion 23 fixes the order of the checks: route (404), content type (415), body (400), lookup (404), transition (409).
+The most involved method. T-006 criterion 22 (which changes T-003 criterion 23) fixes the order of the checks: authentication (401) and the agent role (403) run in the middleware before this handler; then route (404 for a non-GUID id), content type (415), body (400), lookup and read authorization (404), transition (409).
 
 **Why it reads the body itself.** It takes the raw `HttpRequest` instead of a bound request object, for two reasons given in the comments:
 
@@ -231,27 +369,30 @@ The most involved method. T-003 criterion 23 fixes the order of the checks: rout
 
 Steps:
 
-1. **Content type.** If `IsPlainJson(request.ContentType)` is false, returns **415**.
-2. **Parse.** `JsonDocument.ParseAsync(request.Body, ...)`. The size cap is enforced during this read (over 32 KB throws the 413 exception, which is not caught here and goes to the exception handler). Malformed JSON throws `JsonException`, which is caught and becomes **400** with `body` -> `BodyInvalid`. `using` disposes the `JsonDocument` (it rents pooled memory).
-3. **Validate.** `TryReadRequestedStatus` either gives the requested `TicketStatus` or a set of errors -> **400**.
-4. **Read, check, compare-and-swap loop:**
+1. **Id.** `id` is a `string` because the route has no `:guid` constraint (see `MapTicketsEndpoints`). If `Guid.TryParse` fails, returns **404**, the same answer the constraint gives on GET (T-002 criterion 3).
+2. **Content type.** If `IsPlainJson(request.ContentType)` is false, returns **415**.
+3. **Parse.** `JsonDocument.ParseAsync(request.Body, ...)`. The size cap is enforced during this read (over 32 KB throws the 413 exception, which is not caught here and goes to the exception handler). Malformed JSON throws `JsonException`, which is caught and becomes **400** with `body` -> `BodyInvalid`. `using` disposes the `JsonDocument` (it rents pooled memory).
+4. **Validate.** `TryReadRequestedStatus` either gives the requested `TicketStatus` or a set of errors -> **400**.
+5. **Read, check, compare-and-swap loop:**
 
 ```csharp
 for (int attempt = 1; ; attempt++)
 {
-    Ticket? ticket = await store.GetAsync(id, cancellationToken);
-    if (ticket is null) return TypedResults.NotFound();                       // 404
-    if (ticket.Status == requested) return TypedResults.Ok(ToResponse(ticket)); // no-op, 200
+    Ticket? ticket = await store.GetAsync(ticketId, cancellationToken);
+    if (ticket is null || !access.CanRead(user, ticket)) return TypedResults.NotFound(); // 404
+    if (ticket.Status == requested) return TypedResults.Ok(ToResponse(ticket));          // no-op, 200
     if (!TicketTransitions.IsAllowed(ticket.Status, requested) || attempt > MaxStatusWriteAttempts)
-        return TransitionConflict(ticket.Status, requested);                   // 409
-    Ticket? updated = await store.TryUpdateStatusAsync(id, ticket.Status, requested, cancellationToken);
-    if (updated is not null) return TypedResults.Ok(ToResponse(updated));      // 200
+        return TransitionConflict(ticket.Status, requested);                            // 409
+    Ticket? updated = await store.TryUpdateStatusAsync(ticketId, ticket.Status, requested, cancellationToken);
+    if (updated is not null) return TypedResults.Ok(ToResponse(updated));               // 200
 }
 ```
 
+(Shortened; the real code uses braces.)
+
 Returns:
 
-- **404** if the ticket doesn't exist.
+- **404** if the id isn't a GUID, the ticket doesn't exist, or the caller may not read it. The read check uses the same `ITicketAccess.CanRead` as GET (T-006 criterion 21, from the T-003 security audit). Without it, the 409's `currentStatus` or the same-status 200 would reveal a ticket the caller can't read. Today only agents reach this handler and agents can read every ticket, so the check matters if `ITicketAccess` changes (a test host can replace it).
 - **200** without writing if the ticket already has the requested status (T-003 criterion 7: same status is a no-op, not a transition).
 - **409** if the change isn't allowed from the current status.
 - **200** with the updated ticket if the write succeeds.
@@ -318,7 +459,48 @@ Parses the `Content-Type` header with `MediaTypeHeaderValue.TryParse` and return
 private static TicketResponse ToResponse(Ticket ticket)
 ```
 
-Copies a `Ticket` into a `TicketResponse`. This mapping is the only way data leaves the API, which is why the internal `Ticket` class can change without changing the JSON.
+Copies a `Ticket` into a `TicketResponse`. This mapping is the only way data leaves the API, which is why the internal `Ticket` class can change without changing the JSON. It doesn't copy `CreatedBy`, so the creator never appears in a response (T-006 criterion 19).
+
+---
+
+## Features/Tickets/ITicketAccess.cs
+
+Source: [ITicketAccess.cs](../../src/TicketsApi/Features/Tickets/ITicketAccess.cs)
+
+### `internal interface ITicketAccess`
+
+Who may do what with tickets (T-006). It is the one place that owns the access rules: GET, the list, PATCH and the `Agent` policy's handler all ask it, so a test host can replace it in one place (criterion 21). The implementation is [TicketAccess](#featuresticketsticketaccesscs).
+
+| Method | Contract |
+|---|---|
+| `bool IsAgent(ClaimsPrincipal user)` | true when the caller's role claim (`Authentication:RoleClaim`) holds exactly `agent` (criteria 10 to 13) |
+| `bool CanRead(ClaimsPrincipal user, Ticket ticket)` | agents read every ticket; anyone else only the tickets they created (criteria 15, 16 and 18) |
+| `string? ListCreatorFilter(ClaimsPrincipal user)` | the creator to filter the list by: `null` for an agent (all tickets), otherwise the caller's `sub` (criterion 17) |
+
+---
+
+## Features/Tickets/TicketAccess.cs
+
+Source: [TicketAccess.cs](../../src/TicketsApi/Features/Tickets/TicketAccess.cs)
+
+### `internal sealed class TicketAccess(IConfiguration configuration) : ITicketAccess`
+
+The rules of T-006 criteria 10 to 18. It takes `IConfiguration` through its primary constructor to read the role claim name, and is registered as a singleton in `AddTicketsAuth`. `AgentRole` (private constant) is `"agent"`.
+
+### `IsAgent(ClaimsPrincipal user)`
+
+1. Gets the role claim name from `AuthSetup.RoleClaim(configuration)` (the configured name, or `"role"`).
+2. Returns `true` if any of the user's claims has that type and the value `"agent"`, compared with `StringComparison.Ordinal`: exact and case-sensitive, so `Agent` or `agents` is not an agent (criterion 11).
+
+Non-obvious points from the comments: a role claim that holds a JSON array arrives as one claim per value, so `["support", "agent"]` works with the same `Any` check. Nested claims, such as Keycloak's `realm_access.roles`, are not read (criterion 13); the identity provider must put roles in a flat claim. The configuration is read on every call, not cached.
+
+### `CanRead(ClaimsPrincipal user, Ticket ticket)`
+
+Returns `true` if the caller is an agent, or if the ticket has a creator and it equals the caller's `sub` (`user.Subject()`). A ticket created before T-006 has `CreatedBy == null`, so only agents can read it (criterion 18).
+
+### `ListCreatorFilter(ClaimsPrincipal user)`
+
+Returns `null` for an agent (no creator filter: every ticket), otherwise `user.Subject()`.
 
 ---
 
@@ -345,10 +527,12 @@ The domain entity, the shape stored in the database.
 | `Description` | `string?` | optional |
 | `Status` | `TicketStatus` | required |
 | `CreatedAt` | `DateTimeOffset` | required, always UTC |
+| `CreatedBy` | `string?` | optional: the creator's `sub` (T-006 criterion 14); `null` for tickets created before T-006 (criterion 18) |
 
 - `required` means every object initializer must set the property, or the code doesn't compile.
 - `init` means the property can be set only while the object is created. So a `Ticket` is **immutable**: a status change builds a new `Ticket` rather than changing one.
 - `internal`: never exposed directly; responses use `TicketResponse`.
+- `CreatedBy` decides who may read the ticket (see [TicketAccess](#featuresticketsticketaccesscs)). It is not `required`, because old rows have none, and `ToResponse` doesn't map it, so it never reaches a response (criterion 19).
 - There is deliberately no `Version` property. The concurrency version lives only in the database (an EF Core shadow property), so it can never leak into a response (T-005 criteria 8 and 10).
 
 It has no methods.
@@ -409,7 +593,7 @@ What the endpoints need from storage. The endpoints depend on this interface, no
 |---|---|
 | `Task AddAsync(Ticket ticket, CancellationToken)` | saves a new ticket |
 | `Task<Ticket?> GetAsync(Guid id, CancellationToken)` | the ticket, or `null` |
-| `Task<IReadOnlyList<Ticket>> ListAsync(TicketStatus? status, CancellationToken)` | all tickets (or only one status), newest first: `createdAt` descending, then `id` descending for ties (T-002 criteria 4 and 5) |
+| `Task<IReadOnlyList<Ticket>> ListAsync(TicketStatus? status, string? createdBy, CancellationToken)` | all tickets (or only one status), newest first: `createdAt` descending, then `id` descending for ties (T-002 criteria 4 and 5). `createdBy` limits the list to the tickets that user created; `null` means every ticket (T-006 criterion 17) |
 | `Task<Ticket?> TryUpdateStatusAsync(Guid id, TicketStatus expected, TicketStatus next, CancellationToken)` | atomic check-and-set: sets the status to `next` only if it is still `expected`. Returns the updated ticket, or `null` if the ticket is missing or its status changed (T-003 criterion 24) |
 
 ---
@@ -439,13 +623,14 @@ db.Tickets.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id, cancellationToken
 
 One `SELECT` by primary key. Returns the ticket or `null`. `AsNoTracking()` tells EF Core not to keep the result in the change tracker: faster for read-only queries, and nothing stale is left behind.
 
-### `ListAsync(TicketStatus? status, CancellationToken cancellationToken)`
+### `ListAsync(TicketStatus? status, string? createdBy, CancellationToken cancellationToken)`
 
 1. Starts an untracked query.
 2. `if (status is { } filter)` is a pattern that checks the nullable has a value and unwraps it into `filter`. If so, adds `WHERE Status = filter`.
-3. Orders by `CreatedAt` descending, then `Id` descending for ties, and runs the query with `ToListAsync`.
+3. If `createdBy` is not null, adds `WHERE CreatedBy = createdBy` (T-006 criterion 17). Rows with a null `CreatedBy` never match, so tickets from before T-006 only show up for agents, who pass `null` (criterion 18).
+4. Orders by `CreatedAt` descending, then `Id` descending for ties, and runs the query with `ToListAsync`.
 
-The filtering and sorting happen in the database (T-005 criterion 5), not in memory. That works because `CreatedAt` is stored as an integer (see `TicketsDbContext`): SQLite can't sort a `DateTimeOffset`.
+The filtering and sorting happen in the database (T-005 criterion 5), not in memory; the `CreatedBy` filter can use the index declared in `TicketsDbContext`. That works because `CreatedAt` is stored as an integer (see `TicketsDbContext`): SQLite can't sort a `DateTimeOffset`.
 
 ### `TryUpdateStatusAsync(Guid id, TicketStatus expected, TicketStatus next, CancellationToken cancellationToken)`
 
@@ -462,7 +647,7 @@ WHERE Id = @id AND Version = @version
 ```
 
    It doesn't load entities or use the change tracker. If someone else wrote in between, the version no longer matches, so 0 rows change.
-5. If 0 rows changed, return `null` (the endpoint will re-read and retry). Otherwise build and return a new `Ticket` with the new status and the other values from step 1.
+5. If 0 rows changed, return `null` (the endpoint will re-read and retry). Otherwise build and return a new `Ticket` with the new status and the other values from step 1, including `CreatedBy`. `CreatedBy` isn't `required`, so the compiler wouldn't complain if it were left out; it is copied so the returned ticket matches the stored row.
 
 **Why a version and not the status as the check?** If another request changed `Open -> Closed -> Open` in between, a status check would still see `Open` and succeed. The version has gone up twice, so this write correctly fails. No transaction or lock is held between the read and the write; the `WHERE` makes the write itself atomic.
 
@@ -518,6 +703,7 @@ EF Core calls this once to build the model. Each line records a storage decision
 | `Status ... HasConversion<string>().HasMaxLength(20)` | stores the enum as its name, e.g. `"InProgress"` | reordering the enum can't change stored data (criterion 7) |
 | `CreatedAt ... HasConversion(v => v.UtcTicks, ticks => new DateTimeOffset(ticks, TimeSpan.Zero))` | stores the time as UTC ticks (100 ns units) in an INTEGER | SQLite can't `ORDER BY` a `DateTimeOffset`, but it can sort an integer; ticks round-trip exactly (criteria 4 and 5). Read back, the value is always UTC (offset zero) |
 | `Property<int>(VersionProperty).IsConcurrencyToken()` | declares the shadow `Version` column | the version check in `EfTicketStore` |
+| `Property(t => t.CreatedBy)` and `HasIndex(t => t.CreatedBy)` | the creator's `sub`, a nullable TEXT column, with an index (T-006 criteria 14 and 19) | nullable because tickets from before T-006 have no creator; indexed because a non-agent's list filters on it (criterion 17) |
 
 The GUID key is stored as uppercase TEXT (the SQLite provider's default for `Guid`), which the comment notes sorts the same way as `Guid.CompareTo` (criterion 6). That keeps the "id descending for ties" order the same in SQL as in C#.
 
@@ -599,7 +785,7 @@ Returns a context configured with SQLite and the connection string `"Mode=ReadOn
 
 Source: [Data/Migrations](../../src/TicketsApi/Data/Migrations/)
 
-Generated by `dotnet ef migrations add`; don't edit them by hand. `InitialCreate` creates the `Tickets` table (TEXT `Id` primary key, TEXT `Title`, `Description` and `Status`, INTEGER `CreatedAt` and `Version`), and `TicketsDbContextModelSnapshot` records the current model so the tool can work out what the next migration must change. The `.editorconfig` marks this folder as generated code, so the T-011 style rules skip it.
+Generated by `dotnet ef migrations add`; don't edit them by hand. `InitialCreate` creates the `Tickets` table (TEXT `Id` primary key, TEXT `Title`, `Description` and `Status`, INTEGER `CreatedAt` and `Version`). `AddTicketCreatedBy` (T-006) adds a nullable TEXT `CreatedBy` column and the index `IX_Tickets_CreatedBy`; existing rows get `NULL`, which means "agents only" (criterion 18). Its `Down` drops the index, then the column. `TicketsDbContextModelSnapshot` records the current model so the tool can work out what the next migration must change. The `.editorconfig` marks this folder as generated code, so the T-011 style rules skip it.
 
 ---
 
@@ -626,7 +812,7 @@ Two culture settings, deliberately different:
    - `RequestCultureProviders` contains only the `Accept-Language` header provider. The framework's default list also allows a `?culture=` query string and a cookie; those are removed (criterion 6, T-002 criterion 8).
 3. `AddProblemDetails` with a `CustomizeProblemDetails` callback that runs for **every** `ProblemDetails` the app writes: from validation, `TypedResults.Problem`, status code pages and the exception handler (criteria 9 and 10). It:
    - takes the status from the `ProblemDetails`, or else from the response;
-   - picks a resource key: 400 is `Title400Validation` for a validation problem and `Title400` otherwise, then `Title404`, `Title405`, `Title409`, `Title413`, `Title415`, `Title500`; any other status gets no key;
+   - picks a resource key: 400 is `Title400Validation` for a validation problem and `Title400` otherwise, then `Title401` and `Title403` (T-006 criterion 27), `Title404`, `Title405`, `Title409`, `Title413`, `Title415`, `Title500`; any other status gets no key;
    - if there is a key, sets `Title` to the localized text. The localizer is fetched from `context.HttpContext.RequestServices`, the current request's DI scope.
 
    It replaces any title an endpoint set (none does today) and leaves `Detail` alone; no error path sets it, and the exception handler never puts exception details in it.
@@ -635,7 +821,7 @@ Returns `services`.
 
 ### `UseTicketsLocalization(this IApplicationBuilder app)`
 
-Must run first in the pipeline, before the exception handler and status code pages, so the errors they write (413, 500, the 404 for a non-GUID id) are localized too (criterion 10).
+Must run first in the pipeline, before the exception handler, status code pages and authentication, so the errors they write (413, 500, the 404 for a non-GUID id, and since T-006 the 401 and 403) are localized too (criterion 10).
 
 1. `UseRequestLocalization()` reads `Accept-Language` and sets the current cultures for the rest of the request.
 2. A small inline middleware (the `app.Use((context, next) => ...)` lambda):
@@ -655,7 +841,7 @@ Source: [Messages.cs](../../src/TicketsApi/Localization/Messages.cs)
 
 ### `public sealed class Messages`
 
-A **marker type**: it has no members, and its private constructor stops anyone from creating one. It exists only so code can ask for `IStringLocalizer<Messages>`; the localizer uses the type's name to find `Messages.resx` (English) and `Messages.fr.resx` (French) in the same folder. The keys and wording were approved in T-004.
+A **marker type**: it has no members, and its private constructor stops anyone from creating one. It exists only so code can ask for `IStringLocalizer<Messages>`; the localizer uses the type's name to find `Messages.resx` (English) and `Messages.fr.resx` (French) in the same folder. The keys and wording were approved in T-004; T-006 added `Title401` ("Unauthorized" / "Authentification requise") and `Title403` ("Forbidden" / "Accès refusé").
 
 Keys used by the code:
 
@@ -663,7 +849,18 @@ Keys used by the code:
 |---|---|
 | `TitleRequired`, `TitleTooLong`, `DescriptionTooLong` | `IsValid` (POST) |
 | `StatusRequired`, `StatusMustBeOneOf`, `StatusRepeated`, `BodyInvalid` | `TryReadRequestedStatus`, `ChangeStatusAsync`, `ListTicketsAsync` |
-| `Title400Validation`, `Title400`, `Title404`, `Title405`, `Title409`, `Title413`, `Title415`, `Title500` | `CustomizeProblemDetails` |
+| `Title400Validation`, `Title400`, `Title401`, `Title403`, `Title404`, `Title405`, `Title409`, `Title413`, `Title415`, `Title500` | `CustomizeProblemDetails` |
+
+---
+
+## TicketsApi.csproj
+
+Source: [TicketsApi.csproj](../../src/TicketsApi/TicketsApi.csproj)
+
+The project file. Package versions are not here; they live in `Directory.Packages.props`. T-006 added:
+
+- `Microsoft.AspNetCore.Authentication.JwtBearer`: the JWT bearer authentication handler used by `AddJwtBearer()`.
+- `<UserSecretsId>`: identifies this project's **user-secrets** store, a file in the developer's user profile, outside the repo. `dotnet user-jwts` keeps its Development signing key there, so the key is never committed (criterion 7). User-secrets are loaded only in Development.
 
 ---
 
@@ -671,7 +868,9 @@ Keys used by the code:
 
 Sources: [appsettings.json](../../src/TicketsApi/appsettings.json), [appsettings.Development.json](../../src/TicketsApi/appsettings.Development.json)
 
-Not code, but they decide where the data goes.
+Not code, but they decide where the data goes and which tokens are accepted.
 
-- `appsettings.json` (all environments): log levels and `AllowedHosts`. It has **no** connection string, so outside Development you must supply one (for example the `ConnectionStrings__Tickets` environment variable), or startup fails.
-- `appsettings.Development.json` (Development only, merged on top): `ConnectionStrings:Tickets` = `Data Source=App_Data/tickets.dev.db`, resolved against the content root by `GetConnectionString`.
+- `appsettings.json` (all environments): log levels and `AllowedHosts`. It has **no** connection string and no authentication settings, so outside Development you must supply both (for example the environment variables `ConnectionStrings__Tickets`, `Authentication__Schemes__Bearer__Authority` and `Authentication__Schemes__Bearer__Audience`), or startup fails.
+- `appsettings.Development.json` (Development only, merged on top):
+  - `ConnectionStrings:Tickets` = `Data Source=App_Data/tickets.dev.db`, resolved against the content root by `GetConnectionString`.
+  - `Authentication:Schemes:Bearer`: `ValidIssuer` = `dotnet-user-jwts` and `ValidAudiences` = `["tickets-api"]`, the values `dotnet user-jwts create` writes. They are not secret and are committed (T-006 criterion 7). They use the `ValidIssuer` / `ValidAudiences` names because those are what `AddJwtBearer()`'s automatic configuration binding reads (see [AuthSetup.cs](#authauthsetupcs)).

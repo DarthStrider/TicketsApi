@@ -1,3 +1,4 @@
+using TicketsApi.Auth;
 using TicketsApi.Data;
 using TicketsApi.Features.Tickets;
 using TicketsApi.Localization;
@@ -11,8 +12,12 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<TicketStoreTestHooks>();
 builder.Services.AddTicketsDatabase(); // SQLite through EF Core, from ConnectionStrings:Tickets (T-005)
 builder.Services.AddScoped<ITicketStore, EfTicketStore>();
+builder.Services.AddTicketsAuth(); // JWT bearer tokens, the agent role and who may read which ticket (T-006)
 
 WebApplication app = builder.Build();
+
+// Fails fast outside Development when the identity provider isn't configured (T-006 criterion 8).
+app.ValidateAuthSettings();
 
 // Fails fast without a connection string; migrates in Development, refuses pending migrations elsewhere.
 await app.InitializeTicketsDatabaseAsync();
@@ -30,12 +35,16 @@ app.UseExceptionHandler(new ExceptionHandlerOptions
 });
 app.UseStatusCodePages();
 
+// After the error handlers, so a 401 or 403 becomes localized ProblemDetails. Every endpoint requires a signed-in
+// user unless it opts out with AllowAnonymous (T-006 criteria 1 and 5).
+app.UseTicketsAuth();
+
 if (app.Environment.IsDevelopment())
 {
-    app.MapOpenApi();
+    app.MapOpenApi().AllowAnonymous();
 }
 
-app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+app.MapGet("/health", () => Results.Ok(new { status = "ok" })).AllowAnonymous();
 app.MapTicketsEndpoints();
 
 app.Run();

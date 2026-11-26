@@ -645,3 +645,86 @@ foreach (string s in new[] { "Open", "Closed" }) { }
   - Server-side rules are the strongest layer: they apply to every person, agent and tool, even one with a missing or misconfigured local hook.
   - When you tighten a rule, look for workflows that relied on the old freedom (here, `/finish-ticket` pushing to `main`) and update them.
 - **Interview line:** "Agent permissions and hooks run on my machine; a branch ruleset is enforced by GitHub for everyone. I require a PR and green CI on main with zero approvals, since you can't approve your own PR, and I check which workflows the new rule breaks."
+
+### 58. A vague ticket needs a data model before it can be tested (T-006)
+
+- **What happened:** T-006 started as five short bullets (secure the API, agents change status, users read only their own tickets, and so on). After three rounds of questions from the product-manager (7, then 3, then 2), it became 29 acceptance criteria, each one testable. The key gap: "a user who can't read a ticket gets 404, not 403" meant nothing yet, because a ticket didn't record who created it. The ticket had to add a `CreatedBy` column first, and decide what happens to tickets created before T-006 (they have no creator, so only agents can read them). The user answered every question.
+- **Why:** an access rule is a question about data ("whose ticket is this?"). If the data isn't stored, the rule can't be enforced or tested. The questions surfaced product decisions (which claim identifies a user, what the role claim is called, what old rows mean) that an agent must not invent.
+- **Know this:**
+  - Turn each vague bullet into "Given ... when ... then ..." with an exact status code. If you can't write the "given", something is missing from the model.
+  - Answer 404, not 403, for a resource the caller may not see. A 403 confirms the id exists, which leaks information. The same applies on PATCH: a 409 with `currentStatus` would reveal the status of a ticket the caller can't read.
+  - Every new column needs a rule for existing rows. Here `CreatedBy` is nullable, and a null creator means "agents only".
+  - Agents ask, the product owner decides. Each answer went into the ticket before any test was written.
+
+```csharp
+// TicketAccess: the one owner of the read rule
+public bool CanRead(ClaimsPrincipal user, Ticket ticket) =>
+    IsAgent(user) || (ticket.CreatedBy is not null && ticket.CreatedBy == user.Subject());
+```
+
+- **Interview line:** "Before writing a test for an access rule, I check the data can answer it. 'Users only see their own tickets' needed a creator column and a decision about old rows, and the product owner made those calls, not an agent."
+
+### 59. A spike found a side effect that became a product decision (T-006)
+
+- **What happened:** the plan relied on a **fallback authorization policy** (a policy applied to every endpoint that doesn't set its own). Before designing around it, a throwaway app checked how it behaves. It showed the fallback policy also runs for requests that match no route: without a token, `/tickets/abc` (the `:guid` constraint fails, so no route matches) returned 401 instead of 404, and so did `/nothing`. That went to the user as a decision. The user accepted it, and criterion 1 now says unmatched paths also get 401, so an anonymous caller can't learn which routes exist.
+- **Why:** the docs describe the fallback policy in terms of endpoints without authorization metadata; how it treats unmatched routes was not something to assume, and it changes visible behaviour (a 404 becomes a 401).
+- **Know this:**
+  - `SetFallbackPolicy` makes everything require a signed-in user unless it opts out with `AllowAnonymous()`. A new endpoint is protected by default, which is safer than remembering `RequireAuthorization()` on each one.
+  - A named policy such as `Agent` only runs on a matched endpoint. So PATCH `/tickets/{id}/status` dropped the `:guid` constraint and parses the id in the handler: the agent check (403) must come before the 404 for a non-GUID id.
+
+```csharp
+services.AddAuthorizationBuilder()
+    .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build());
+app.MapGet("/health", () => Results.Ok(new { status = "ok" })).AllowAnonymous();
+```
+
+  - When a spike shows behaviour nobody specified, it isn't the developer's call. Put it in front of the product owner and record the answer in the ticket.
+- **Interview line:** "I spiked the fallback authorization policy before building on it, and it turned 404s for unknown routes into 401s. That's a visible behaviour change, so I took it to the product owner instead of deciding it in code."
+
+### 60. Every valid token got 401: diagnose, don't guess (T-006)
+
+- **What happened:** after wiring JWT bearer authentication, every valid token was rejected with 401. The first guess (the configuration manager that fetches provider metadata) was wrong. A temporary diagnostic test called `AuthenticateAsync` and printed the failure: `IDX10214: Audience validation failed`. The cause: the framework's automatic binding of `Authentication:Schemes:Bearer` reads `ValidAudience` / `ValidAudiences`, not `Audience`, so the configured audience was never used. The fix went into production code (a `Configure` step that reads the `Audience` key and sets `options.Audience`), not into the test.
+- **Why:** a 401 is deliberately uninformative (the API never explains why a token was rejected, criterion 28), so the response alone can't tell you which check failed. Guessing from the outside wastes time.
+- **Know this:**
+  - Get the real error first. `AuthenticateAsync` returns an `AuthenticateResult` whose `Failure` holds the exception; the `IDX` codes come from the Microsoft.IdentityModel token libraries and name the check that failed.
+  - Configuration binding is by property name. A key that matches no property is silently ignored.
+  - Fix the cause where it lives. Changing the test's token to fit the broken setting would have hidden a bug production would hit.
+  - Delete the diagnostic test once it has answered the question.
+
+```csharp
+AuthenticateResult result = await context.AuthenticateAsync(JwtBearerDefaults.AuthenticationScheme);
+// result.Failure?.Message: "IDX10214: Audience validation failed ..."
+```
+
+- **Interview line:** "When every token got a 401, I stopped guessing and wrote a throwaway test that printed the authentication failure. It said audience validation failed, because the config binder ignored the key we used, and I fixed that in the app, not the test."
+
+### 61. The security auditor proved a hole with a red test (T-006)
+
+- **What happened:** the security-auditor noticed that the framework binding also reads signing keys from configuration, in the format `dotnet user-jwts` uses for Development. In Production, anyone able to put a symmetric key into configuration could mint valid tokens. A test proved it first: a Production host with a configured symmetric key accepted a self-signed HS256 token with **200 OK** (red). The fix, outside Development only: metadata only over HTTPS, signing keys only from the provider's discovery document (configured keys are cleared), and only asymmetric algorithms (RS*, PS*, ES*). The same test then got 401.
+- **Why:** a Development convenience (keys in user-secrets) was active in every environment. The happy-path tests couldn't notice, because none of them tried to forge a token.
+- **Know this:**
+  - **Symmetric** signing (HS256): the same secret signs and verifies, so whoever can verify can also forge. **Asymmetric** (RS256, ES256): the provider signs with a private key; the API holds only the public key, so it can verify but never sign.
+  - Defense in depth: the provider already signs asymmetrically, but the API also refuses anything else, so a configuration mistake can't weaken it.
+  - Prove a security bug with a failing test before fixing it. The test then guards the fix from then on.
+
+```csharp
+if (!environment.IsDevelopment())
+{
+    options.RequireHttpsMetadata = true;
+    options.TokenValidationParameters.IssuerSigningKey = null;
+    options.TokenValidationParameters.IssuerSigningKeys = null;
+    options.TokenValidationParameters.ValidAlgorithms = AsymmetricAlgorithms;
+}
+```
+
+- **Interview line:** "Our auditor agent found that a Development convenience let a configured symmetric key sign tokens in Production. We proved it with a test that got 200 for a forged token, then locked Production to discovery keys and asymmetric algorithms, and the same test now gets 401."
+
+### 62. Surviving mutants, equivalent mutants, and comments that are claims (T-006)
+
+- **What happened:** QA mutated the auth code one line at a time and re-ran the tests. Removing the `ValidAlgorithms` line left every test green: it had no test of its own, so one was added. Three other mutants also survived but were **equivalent**: with JwtBearer 10.0.15, the explicit `ValidateIssuer = true` style lines already equal the effective values, so no request can tell the mutant from the original. Separately, a code comment the developer wrote from a reviewer's unverified recollection said the framework binding "turns validation off". QA measured it on 10.0.15: false. The comment now states what was measured and why the lines stay.
+- **Why:** a green suite only proves the behaviour it exercises. And a comment is read as fact by every later developer and agent, so an unverified one spreads the error.
+- **Know this:**
+  - A surviving mutant means one of two things: a missing test (add one) or an equivalent mutant (no observable difference). For an equivalent one, record why, and keep the line only if it has another purpose; here it guards against configuration or a later package version changing the default.
+  - Don't invent contrived tests to kill equivalent mutants; explain them instead.
+  - Treat a comment like a claim in a review: verify it, or say where it came from.
+- **Interview line:** "Mutation testing showed one security line with no test, and three mutants no request could tell apart, which we documented rather than faking tests for. It also caught a comment I'd written from someone's memory, so now I verify comments like any other claim."

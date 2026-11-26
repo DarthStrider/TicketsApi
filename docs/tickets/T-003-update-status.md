@@ -42,6 +42,7 @@
 ### Id and order of checks
 22. Given no ticket has that id, when I PATCH `/tickets/{id}/status` with a well-formed GUID and a valid body, then I get `404` with ProblemDetails.
 23. The route is `/tickets/{id:guid}/status`. Given an id that is not a GUID (for example `/tickets/abc/status`), when I PATCH it, then I get `404` with ProblemDetails. Checks run in this order: route (`404`), content type (`415`), body (`400`), lookup (`404`), transition (`409`). So given an unknown id and an invalid body, when I PATCH, then I get `400`. Other verbs on this route are not specified (framework default).
+   - Changed by T-006 (criterion 22): authentication (`401`) and role (`403`) now run first, and the lookup `404` also covers tickets the caller may not read.
 
 ### Concurrency
 24. A status change is checked against the ticket's current status and applied atomically (check-and-set). Given a Resolved ticket, when a PATCH to Closed and a PATCH to InProgress both read the ticket's current status before either one writes, then exactly one gets `200` and the other gets `409`, and the final status is the one that got `200`.
